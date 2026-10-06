@@ -4,6 +4,7 @@
 #include "internal/json.hpp"
 #include "crop_geometry.hpp"
 #include "visual_samples.hpp"
+#include "promote.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -1247,6 +1248,7 @@ void usage()
     std::cerr
         << "usage:\n"
         << "  hscam-qualify run MANIFEST.json --output DIR [--camera ID] [--rerun]\n"
+        << "  hscam-qualify promote RUN_DIR --results-root DIR\n"
         << "  hscam-qualify --worker CASE.json RESULT.json\n";
 }
 
@@ -1435,6 +1437,38 @@ int main(int argc, char **argv)
     try {
         if (argc == 4 && std::string_view(argv[1]) == "--worker")
             return workerMain(argv[2], argv[3]);
+
+        if (argc >= 2 && std::string_view(argv[1]) == "promote") {
+            if (argc < 5) {
+                usage();
+                return 2;
+            }
+
+            const fs::path run = argv[2];
+            fs::path resultsRoot;
+            for (int i = 3; i < argc; ++i) {
+                const std::string arg = argv[i];
+                if (arg == "--results-root" && i + 1 < argc)
+                    resultsRoot = argv[++i];
+                else {
+                    usage();
+                    return 2;
+                }
+            }
+            if (resultsRoot.empty())
+                throw std::runtime_error("--results-root is required");
+
+            const auto promoted =
+                hscam::qualification::promoteQualificationRun(
+                    run, resultsRoot);
+            std::cout << "published qualification: "
+                      << promoted.destination << "\n"
+                      << "published files: "
+                      << promoted.copiedFiles.size() << "\n"
+                      << "omitted raw bundles: "
+                      << promoted.omittedRawBundles.size() << "\n";
+            return 0;
+        }
 
         if (argc < 5 || std::string_view(argv[1]) != "run") {
             usage();
