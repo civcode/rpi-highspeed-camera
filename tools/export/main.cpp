@@ -21,6 +21,7 @@ void usage()
 {
     std::cerr << "usage:\n"
                  "  hscam-export inspect CAPTURE.hscap\n"
+                 "  hscam-export recover CAPTURE.hscap\n"
                  "  hscam-export image CAPTURE.hscap --frame N --output frame.png\n"
                  "  hscam-export dng CAPTURE.hscap --frame N --output frame.dng\n"
                  "  hscam-export video CAPTURE.hscap --output preview.mp4 [--playback-fps N]\n";
@@ -140,6 +141,22 @@ int main(int argc, char **argv)
             else if (arg == "--output" && i + 1 < argc) output = argv[++i];
             else if (arg == "--playback-fps" && i + 1 < argc) playbackFps = static_cast<unsigned>(std::stoul(argv[++i]));
             else { usage(); return 2; }
+        }
+
+        if (command == "recover") {
+            if (argc != 3) {
+                usage();
+                return 2;
+            }
+            const auto recovery = hscam::recoverBundle(capture);
+            std::cout << "recovered frames: " << recovery.recoveredFrames << "\n"
+                      << "was complete: " << (recovery.wasComplete ? "yes" : "no") << "\n"
+                      << "discarded index bytes: " << recovery.discardedIndexBytes << "\n"
+                      << "discarded payload bytes: " << recovery.discardedPayloadBytes << "\n"
+                      << "discarded metadata bytes: " << recovery.discardedMetadataBytes << "\n"
+                      << "synthesized metadata frames: "
+                      << recovery.synthesizedMetadataFrames << "\n";
+            return 0;
         }
 
         hscam::BundleReader reader(capture);
