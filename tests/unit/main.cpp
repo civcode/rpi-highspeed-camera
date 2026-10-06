@@ -6,7 +6,9 @@
 #include <algorithm>
 #include <array>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <sstream>
 
 namespace {
 void require(bool value, const char *message)
@@ -60,6 +62,29 @@ void raw12Unpack()
     require(raw.pixels[0] == 0x123 && raw.pixels[1] == 0xabc, "RAW12 unpack values");
 }
 
+void rawPartialGroups()
+{
+    using namespace hscam;
+
+    BundleManifest raw10;
+    raw10.configuration.stream.size = {1, 1};
+    raw10.configuration.stream.format = {"SRGGB10_CSI2P"};
+    raw10.observedPlanes = {{2, 2}};
+    const std::array<std::byte, 2> ten{std::byte{0xff}, std::byte{0x03}};
+    const auto decoded10 = raw::decodeRaw(raw10, ten);
+    require(decoded10.pixels.size() == 1 && decoded10.pixels[0] == 1023,
+            "partial RAW10 group");
+
+    BundleManifest raw12;
+    raw12.configuration.stream.size = {1, 1};
+    raw12.configuration.stream.format = {"SRGGB12_CSI2P"};
+    raw12.observedPlanes = {{2, 2}};
+    const std::array<std::byte, 2> twelve{std::byte{0x12}, std::byte{0x03}};
+    const auto decoded12 = raw::decodeRaw(raw12, twelve);
+    require(decoded12.pixels.size() == 1 && decoded12.pixels[0] == 0x123,
+            "partial RAW12 group");
+}
+
 void bundleRoundTrip()
 {
     using namespace hscam;
@@ -80,7 +105,7 @@ void bundleRoundTrip()
     PlaneView plane{pixels, 4, 8, -1};
     FrameMetadata metadata;
     metadata.sequence = 7;
-    metadata.sensorTimestamp = std::chrono::nanoseconds(123456789);
+    metadata.sensorTimestamp = std::chrono::nanoseconds(9007199254740993LL);
 
     {
         BundleWriter writer(path, "test-camera", "synthetic", cfg);
@@ -98,6 +123,24 @@ void bundleRoundTrip()
     const auto preview = raw::renderPreview(reader.manifest(), stored);
     require(preview.pixels.size() == 4 * 2 * 3, "preview RGB size");
 
+    {
+        std::ifstream metadataFile(path / "metadata.jsonl");
+        std::ostringstream metadataText;
+        metadataText << metadataFile.rdbuf();
+        require(metadataText.str().find("9007199254740993") != std::string::npos,
+                "64-bit timestamp must be serialized exactly");
+    }
+
+    const auto png = path / "preview.png";
+    raw::writePng(png, preview);
+    {
+        std::ifstream image(png, std::ios::binary);
+        std::array<unsigned char, 8> signature{};
+        image.read(reinterpret_cast<char *>(signature.data()), signature.size());
+        const std::array<unsigned char, 8> expected{137,80,78,71,13,10,26,10};
+        require(signature == expected, "PNG signature");
+    }
+
     std::filesystem::remove_all(path, ec);
 }
 }
@@ -108,6 +151,7 @@ int main()
         geometryAndModeIds();
         raw10Unpack();
         raw12Unpack();
+        rawPartialGroups();
         bundleRoundTrip();
         std::cout << "hscam unit tests passed\n";
         return 0;
