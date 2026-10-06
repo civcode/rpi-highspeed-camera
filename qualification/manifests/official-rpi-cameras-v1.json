@@ -14,10 +14,11 @@
   },
   "crop_performance": {
     "enabled": true,
-    "strategy": "all_heights_full_width",
+    "strategy": "all_heights_width_samples",
     "duration_ms": 3000,
     "exact": true,
-    "max_cases": 0
+    "max_cases": 0,
+    "sample_positions": true
   },
   "explicit_crops": {
     "enabled": false,
