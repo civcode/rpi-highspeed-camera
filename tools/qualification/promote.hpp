@@ -2,11 +2,13 @@
 
 #include "internal/json.hpp"
 
+#include <array>
 #include <cctype>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <map>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -441,6 +443,92 @@ inline PromotionResult promoteQualificationRun(
     }
 
     return result;
+}
+
+struct OfficialDatasetAudit {
+    std::map<std::string, std::vector<std::filesystem::path>> resultsBySensor;
+    std::vector<std::string> missingSensors;
+    std::vector<std::string> invalidReceipts;
+
+    [[nodiscard]] bool complete() const noexcept {
+        return missingSensors.empty() && invalidReceipts.empty();
+    }
+};
+
+inline OfficialDatasetAudit auditOfficialDataset(
+    const std::filesystem::path &resultsRoot,
+    std::string_view campaign = "official-rpi-cameras-v1")
+{
+    namespace fs = std::filesystem;
+    static constexpr std::array<std::string_view, 6> expected{
+        "ov5647", "imx219", "imx708", "imx477", "imx296", "imx500"
+    };
+
+    OfficialDatasetAudit audit;
+    for (const auto sensor : expected)
+        audit.resultsBySensor.emplace(std::string(sensor),
+                                     std::vector<fs::path>{});
+
+    if (fs::exists(resultsRoot)) {
+        for (fs::recursive_directory_iterator it(resultsRoot), end;
+             it != end; ++it) {
+            if (!it->is_regular_file() ||
+                it->path().filename() != "published.json")
+                continue;
+
+            try {
+                const auto receipt = internal::json::parse(
+                    promotionReadText(it->path()));
+                requireSchemaVersion1(receipt, "published receipt");
+
+                if (receipt.at("campaign").asString() != campaign)
+                    continue;
+
+                const std::string sensor =
+                    pathComponent(receipt.at("sensor").asString());
+                std::string matched;
+                for (const auto expectedSensor : expected) {
+                    if (sensor.find(expectedSensor) != std::string::npos) {
+                        matched = std::string(expectedSensor);
+                        break;
+                    }
+                }
+                if (matched.empty())
+                    continue;
+
+                const auto directory = it->path().parent_path();
+                static constexpr std::array<std::string_view, 10> required{
+                    "campaign.json", "plan.json", "environment.json",
+                    "environment_end.json", "camera.json",
+                    "mode_sensor_crops.json", "campaign_status.json",
+                    "results.json", "results.csv", "report.md"
+                };
+                for (const auto file : required) {
+                    if (!fs::is_regular_file(directory / file))
+                        throw std::runtime_error(
+                            "missing " + std::string(file));
+                }
+
+                const auto status = internal::json::parse(
+                    promotionReadText(directory / "campaign_status.json"));
+                requireSchemaVersion1(status, "campaign_status");
+                if (!status.at("valid").asBool())
+                    throw std::runtime_error(
+                        "campaign_status.valid is false");
+
+                audit.resultsBySensor[matched].push_back(directory);
+            } catch (const std::exception &e) {
+                audit.invalidReceipts.push_back(
+                    it->path().string() + ": " + e.what());
+            }
+        }
+    }
+
+    for (const auto sensor : expected) {
+        if (audit.resultsBySensor[std::string(sensor)].empty())
+            audit.missingSensors.push_back(std::string(sensor));
+    }
+    return audit;
 }
 
 } // namespace hscam::qualification
