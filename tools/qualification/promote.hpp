@@ -2,8 +2,8 @@
 
 #include "internal/json.hpp"
 
-#include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -48,6 +48,14 @@ inline std::string pathComponent(std::string_view input)
     return out.empty() ? "unknown" : out;
 }
 
+inline void requireSchemaVersion1(const internal::json::Value &value,
+                                  std::string_view artifact)
+{
+    if (value.at("schema_version").asUInt64() != 1)
+        throw std::runtime_error(
+            "unsupported " + std::string(artifact) + " schema version");
+}
+
 inline void copyPromotionFile(const std::filesystem::path &source,
                               const std::filesystem::path &destination,
                               PromotionResult &result,
@@ -55,13 +63,16 @@ inline void copyPromotionFile(const std::filesystem::path &source,
 {
     if (!std::filesystem::exists(source)) {
         if (required)
-            throw std::runtime_error("required qualification artifact is missing: " + source.string());
+            throw std::runtime_error(
+                "required qualification artifact is missing: " +
+                source.string());
         return;
     }
 
     std::filesystem::create_directories(destination.parent_path());
-    std::filesystem::copy_file(source, destination,
-                               std::filesystem::copy_options::overwrite_existing);
+    std::filesystem::copy_file(
+        source, destination,
+        std::filesystem::copy_options::overwrite_existing);
     result.copiedFiles.push_back(destination);
 }
 
@@ -74,14 +85,21 @@ inline bool insideRawBundle(const std::filesystem::path &relative)
     return false;
 }
 
-inline PromotionResult promoteQualificationRun(const std::filesystem::path &run,
-                                               const std::filesystem::path &resultsRoot)
+inline PromotionResult promoteQualificationRun(
+    const std::filesystem::path &run,
+    const std::filesystem::path &resultsRoot)
 {
     namespace fs = std::filesystem;
     using internal::json::Value;
 
+    if (fs::exists(run / "recovery_failure.json"))
+        throw std::runtime_error(
+            "refusing to promote qualification run with "
+            "recovery_failure.json");
+
     const auto status = internal::json::parse(
         promotionReadText(run / "campaign_status.json"));
+    requireSchemaVersion1(status, "campaign_status");
     if (!status.at("valid").asBool()) {
         std::string reason = "campaign_status.valid is false";
         if (const auto *value = status.find("reason");
@@ -93,12 +111,54 @@ inline PromotionResult promoteQualificationRun(const std::filesystem::path &run,
 
     const auto plan =
         internal::json::parse(promotionReadText(run / "plan.json"));
+    requireSchemaVersion1(plan, "qualification plan");
+
+    const auto campaignDocument =
+        internal::json::parse(promotionReadText(run / "campaign.json"));
+    requireSchemaVersion1(campaignDocument, "campaign manifest");
+
     const auto camera =
         internal::json::parse(promotionReadText(run / "camera.json"));
+    requireSchemaVersion1(camera, "camera snapshot");
+
     const auto environment =
         internal::json::parse(promotionReadText(run / "environment.json"));
+    requireSchemaVersion1(environment, "environment snapshot");
+
+    const auto environmentEnd =
+        internal::json::parse(
+            promotionReadText(run / "environment_end.json"));
+    requireSchemaVersion1(
+        environmentEnd, "end environment snapshot");
+
+    const auto results =
+        internal::json::parse(promotionReadText(run / "results.json"));
+    requireSchemaVersion1(results, "results");
 
     const std::string campaign = plan.at("campaign").asString();
+    if (campaignDocument.at("campaign").asString() != campaign)
+        throw std::runtime_error(
+            "campaign.json does not match plan.json campaign");
+
+    const std::string sourceRevision =
+        plan.at("source_revision").asString();
+    if (sourceRevision.empty() ||
+        sourceRevision == "unknown" ||
+        sourceRevision.ends_with("-dirty"))
+        throw std::runtime_error(
+            "refusing to promote a run without a clean committed "
+            "source revision");
+
+    if (const auto *visual =
+            campaignDocument.find("visual_samples");
+        visual && visual->isObject()) {
+        if (const auto *enabled = visual->find("enabled");
+            enabled && enabled->asBool() &&
+            !fs::exists(run / "samples.json"))
+            throw std::runtime_error(
+                "visual_samples are enabled but samples.json is missing");
+    }
+
     const std::string planId = plan.at("plan_id").asString();
     const std::string cameraId = camera.at("id").asString();
     const std::string cameraModel = camera.at("model").asString();
@@ -126,7 +186,10 @@ inline PromotionResult promoteQualificationRun(const std::filesystem::path &run,
             result.destination.string());
     fs::create_directories(result.destination);
 
-    struct Artifact { const char *name; bool required; };
+    struct Artifact {
+        const char *name;
+        bool required;
+    };
     static constexpr Artifact artifacts[] = {
         {"campaign.json", true},
         {"plan.json", true},
@@ -138,21 +201,22 @@ inline PromotionResult promoteQualificationRun(const std::filesystem::path &run,
         {"results.json", true},
         {"results.csv", true},
         {"report.md", true},
-        {"samples.json", false},
-        {"recovery_failure.json", false}
+        {"samples.json", false}
     };
 
     try {
         for (const auto &artifact : artifacts)
-            copyPromotionFile(run / artifact.name,
-                              result.destination / artifact.name,
-                              result, artifact.required);
+            copyPromotionFile(
+                run / artifact.name,
+                result.destination / artifact.name,
+                result, artifact.required);
 
         const auto samples = run / "samples";
         if (fs::exists(samples)) {
             for (fs::recursive_directory_iterator it(samples), end;
                  it != end; ++it) {
-                const auto relative = fs::relative(it->path(), samples);
+                const auto relative =
+                    fs::relative(it->path(), samples);
                 if (it->is_directory() &&
                     it->path().extension() == ".hscap") {
                     result.omittedRawBundles.push_back(relative);
@@ -165,9 +229,11 @@ inline PromotionResult promoteQualificationRun(const std::filesystem::path &run,
 
                 const auto destination =
                     result.destination / "samples" / relative;
-                fs::create_directories(destination.parent_path());
-                fs::copy_file(it->path(), destination,
-                              fs::copy_options::overwrite_existing);
+                fs::create_directories(
+                    destination.parent_path());
+                fs::copy_file(
+                    it->path(), destination,
+                    fs::copy_options::overwrite_existing);
                 result.copiedFiles.push_back(destination);
             }
         }
@@ -177,24 +243,31 @@ inline PromotionResult promoteQualificationRun(const std::filesystem::path &run,
             omitted.emplace_back(path.string());
 
         const Value publication = Value::Object{
-            {"schema_version", static_cast<std::uint64_t>(1)},
+            {"schema_version",
+             static_cast<std::uint64_t>(1)},
             {"campaign", campaign},
             {"plan_id", planId},
+            {"source_revision", sourceRevision},
             {"camera_id", cameraId},
             {"camera_model", cameraModel},
             {"sensor", sensor},
             {"platform", platform},
-            {"raw_sample_bundles_omitted", std::move(omitted)}
+            {"raw_sample_bundles_omitted",
+             std::move(omitted)}
         };
 
         std::ofstream published(
             result.destination / "published.json",
             std::ios::binary | std::ios::trunc);
         if (!published)
-            throw std::runtime_error("failed to create published.json");
-        published << internal::json::stringify(publication, 2) << '\n';
+            throw std::runtime_error(
+                "failed to create published.json");
+        published <<
+            internal::json::stringify(publication, 2) <<
+            '\n';
         if (!published)
-            throw std::runtime_error("failed to write published.json");
+            throw std::runtime_error(
+                "failed to write published.json");
         result.copiedFiles.push_back(
             result.destination / "published.json");
     } catch (...) {
