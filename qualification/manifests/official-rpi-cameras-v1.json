@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "campaign": "official-rpi-cameras-v1",
+  "worker_timeout_ms": 20000,
+  "require_zero_drops": true,
+  "advertised_modes": {
+    "enabled": true,
+    "duration_ms": 5000
+  },
+  "explicit_crops": {
+    "enabled": false,
+    "duration_ms": 5000,
+    "exact": true,
+    "crops": []
+  }
+}
