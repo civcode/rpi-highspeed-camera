@@ -4,9 +4,25 @@ This directory is reserved for **promoted reference results** from the official 
 
 Do not place in-progress runs here. Working output belongs under `qualification/work/`.
 
+## Promotion command
+
+Do not copy a completed run into this directory manually. Use the guarded
+promotion command:
+
+```bash
+hscam-qualify promote \
+  qualification/work/<camera> \
+  --results-root qualification/results
+```
+
+The promoter validates the publication gate, creates a provenance-preserving
+destination, copies the canonical result artifacts and derived visual evidence,
+omits large raw `.hscap` sample bundles, and records that omission in
+`published.json`.
+
 ## Promotion layout
 
-Use a provenance-preserving path such as:
+The command creates a path such as:
 
 ```text
 qualification/results/
@@ -24,6 +40,7 @@ qualification/results/
                 results.csv
                 report.md
                 samples.json
+                published.json
                 samples/
                     ...
 ```
