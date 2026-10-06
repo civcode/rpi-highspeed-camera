@@ -774,15 +774,104 @@ Value timeoutResult(const TestCase &test)
     };
 }
 
+std::string csvEscape(std::string_view value)
+{
+    bool quote = false;
+    for (const char ch : value)
+        quote = quote || ch == ',' || ch == '"' || ch == '\n' || ch == '\r';
+    if (!quote) return std::string(value);
+
+    std::string out = "\"";
+    for (const char ch : value) {
+        if (ch == '"') out += "\"\"";
+        else out += ch;
+    }
+    out += '"';
+    return out;
+}
+
+std::string cropLabel(const TestCase &test)
+{
+    if (!test.crop) return "-";
+    std::ostringstream out;
+    out << test.crop->x << ',' << test.crop->y << ','
+        << test.crop->width << ',' << test.crop->height;
+    return out.str();
+}
+
+std::string caseType(const TestCase &test)
+{
+    if (test.crop) return "sensor_crop";
+    if (test.modeId) return "advertised_mode";
+    return "capture";
+}
+
+const Value *resultStats(const Value &result)
+{
+    if (const auto *stats = result.find("stats"))
+        return stats;
+    if (const auto *final = result.find("final_result")) {
+        if (const auto *stats = final->find("stats"))
+            return stats;
+    }
+    return nullptr;
+}
+
+std::optional<std::int64_t> resultBestDurationUs(const Value &result)
+{
+    if (const auto *value = result.find("best_frame_duration_us")) {
+        if (!value->isNull()) return value->asInt64();
+    }
+    if (const auto *value = result.find("last_frame_duration_us")) {
+        if (!value->isNull()) return value->asInt64();
+    }
+    if (const auto *final = result.find("final_result")) {
+        if (const auto *value = final->find("last_frame_duration_us")) {
+            if (!value->isNull()) return value->asInt64();
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<double> resultBestFps(const Value &result)
+{
+    if (const auto *value = result.find("best_measured_fps")) {
+        if (!value->isNull()) return value->asNumber();
+    }
+    if (const auto *stats = resultStats(result)) {
+        const auto &value = stats->at("measured_fps");
+        if (!value.isNull()) return value.asNumber();
+    }
+    return std::nullopt;
+}
+
+std::string resultError(const Value &result)
+{
+    if (const auto *error = result.find("error")) {
+        if (!error->isNull()) return error->asString();
+    }
+    return {};
+}
+
 void generateAggregate(const fs::path &output, std::string_view planId,
                        const std::vector<TestCase> &cases)
 {
     Value::Array results;
     std::ostringstream report;
+    std::ostringstream csv;
+
     report << "# Qualification results\n\n";
     report << "Plan: `" << planId << "`\n\n";
-    report << "| Case | Status | Frames | FPS | Gaps | Overruns |\n";
-    report << "| --- | --- | ---: | ---: | ---: | ---: |\n";
+    report << "| Case | Type | Mode/crop | Status | Max stable FPS | Frame duration (us) | Frames | Gaps | Overruns |\n";
+    report << "| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: |\n";
+
+    csv << "case_id,type,mode_id,crop_x,crop_y,crop_width,crop_height,status,"
+           "best_frame_duration_us,best_measured_fps,requests_completed,sequence_gaps,"
+           "queue_overruns,error\n";
+
+    std::uint64_t passCount{};
+    std::uint64_t unstableCount{};
+    std::uint64_t errorCount{};
 
     for (const auto &test : cases) {
         const auto path = output / "cases" / (test.id + ".json");
@@ -790,30 +879,83 @@ void generateAggregate(const fs::path &output, std::string_view planId,
         results.push_back(result);
 
         const std::string status = result.at("status").asString();
+        if (status == "pass") ++passCount;
+        else if (status == "unstable") ++unstableCount;
+        else ++errorCount;
+
+        const auto *stats = resultStats(result);
+        const auto bestDuration = resultBestDurationUs(result);
+        const auto bestFps = resultBestFps(result);
+
         std::string frames = "-";
-        std::string fps = "-";
         std::string gaps = "-";
         std::string overruns = "-";
-        if (const auto *stats = result.find("stats")) {
+        if (stats) {
             frames = std::to_string(stats->at("requests_completed").asUInt64());
             gaps = std::to_string(stats->at("sequence_gaps").asUInt64());
             overruns = std::to_string(stats->at("queue_overruns").asUInt64());
-            if (!stats->at("measured_fps").isNull()) {
-                std::ostringstream out;
-                out << std::fixed << std::setprecision(3) << stats->at("measured_fps").asNumber();
-                fps = out.str();
-            }
         }
-        report << "| " << test.id << " | " << status << " | " << frames << " | "
-               << fps << " | " << gaps << " | " << overruns << " |\n";
+
+        std::string fps = "-";
+        if (bestFps) {
+            std::ostringstream value;
+            value << std::fixed << std::setprecision(3) << *bestFps;
+            fps = value.str();
+        }
+
+        const std::string geometry = test.crop ? cropLabel(test)
+                                              : (test.modeId ? *test.modeId : "-");
+
+        report << "| " << test.id
+               << " | " << caseType(test)
+               << " | " << geometry
+               << " | " << status
+               << " | " << fps
+               << " | " << (bestDuration ? std::to_string(*bestDuration) : "-")
+               << " | " << frames
+               << " | " << gaps
+               << " | " << overruns
+               << " |\n";
+
+        csv << csvEscape(test.id) << ','
+            << caseType(test) << ','
+            << csvEscape(test.modeId.value_or("")) << ',';
+        if (test.crop) {
+            csv << test.crop->x << ',' << test.crop->y << ','
+                << test.crop->width << ',' << test.crop->height;
+        } else {
+            csv << ",,,";
+        }
+        csv << ',' << csvEscape(status) << ',';
+        if (bestDuration) csv << *bestDuration;
+        csv << ',';
+        if (bestFps) csv << std::setprecision(12) << *bestFps;
+        csv << ',';
+        if (stats) csv << stats->at("requests_completed").asUInt64();
+        csv << ',';
+        if (stats) csv << stats->at("sequence_gaps").asUInt64();
+        csv << ',';
+        if (stats) csv << stats->at("queue_overruns").asUInt64();
+        csv << ',' << csvEscape(resultError(result)) << '\n';
     }
+
+    report << "\n## Summary\n\n";
+    report << "- Passed: " << passCount << "\n";
+    report << "- Unstable: " << unstableCount << "\n";
+    report << "- Error/timeout/unsupported: " << errorCount << "\n";
 
     const Value aggregate = Value::Object{
         {"schema_version", static_cast<std::uint64_t>(1)},
         {"plan_id", std::string(planId)},
+        {"summary", Value::Object{
+            {"pass", passCount},
+            {"unstable", unstableCount},
+            {"error_or_other", errorCount}
+        }},
         {"results", std::move(results)}
     };
     writeText(output / "results.json", hscam::internal::json::stringify(aggregate, 2) + "\n");
+    writeText(output / "results.csv", csv.str());
     writeText(output / "report.md", report.str());
 }
 
