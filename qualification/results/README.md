@@ -75,6 +75,36 @@ Do not delete rejected, unsupported or unstable cases. They are part of the meas
 
 Do not manually edit numeric test results during promotion. If a run is wrong, fix the implementation/protocol and run a new campaign.
 
+## Dataset completeness audit
+
+After promotion, check the six-sensor v1 gate with:
+
+```bash
+hscam-qualify audit-results \
+  --results-root qualification/results
+```
+
+The command returns success only when every required v1 sensor family is
+represented by either a valid promoted result or an explicit blocked record,
+and no recognized receipt is invalid.
+
+A sensor that genuinely cannot be completed may be documented with a
+`blocked.json` file under the results tree. The minimum v1 shape is:
+
+```json
+{
+  "schema_version": 1,
+  "campaign": "official-rpi-cameras-v1",
+  "sensor": "imx500",
+  "status": "blocked",
+  "reason": "specific, reviewable explanation"
+}
+```
+
+The reason must be non-empty. Do not create a blocked record merely to make the
+audit pass: it is a published statement that the campaign could not be
+completed and should explain the physical, driver, or environment constraint.
+
 ## Large artifacts
 
 The complete timing/configuration dataset, raw crop-negotiation trace, per-case/FPS-search timing traces, and representative visual evidence are kept with the promoted result.
