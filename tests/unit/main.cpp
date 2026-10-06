@@ -85,6 +85,95 @@ void rawPartialGroups()
             "partial RAW12 group");
 }
 
+void bundleRecovery()
+{
+    using namespace hscam;
+    const auto path = std::filesystem::temp_directory_path() / "hscam-recovery-unit.hscap";
+    std::error_code ec;
+    std::filesystem::remove_all(path, ec);
+
+    CaptureConfiguration cfg;
+    cfg.stream.kind = StreamKind::Raw;
+    cfg.stream.size = {4, 2};
+    cfg.stream.format = {"SRGGB8"};
+    cfg.stream.frameBytes = 8;
+
+    std::array<std::byte, 8> pixels{
+        std::byte{0}, std::byte{1}, std::byte{2}, std::byte{3},
+        std::byte{4}, std::byte{5}, std::byte{6}, std::byte{7}
+    };
+    PlaneView plane{pixels, 4, 8, -1};
+    FrameMetadata metadata;
+    metadata.sequence = 1;
+
+    {
+        BundleWriter writer(path, "test-camera", "synthetic", cfg);
+        writer.append(metadata, std::span<const PlaneView>(&plane, 1));
+        metadata.sequence = 2;
+        writer.append(metadata, std::span<const PlaneView>(&plane, 1));
+        // Deliberately do not finalize: this simulates a capture that did not
+        // reach its normal completion path.
+    }
+
+    // Simulate a hard kill at awkward write boundaries: stale manifest count,
+    // an incomplete index record, unreferenced payload bytes, and a partial
+    // second metadata line.
+    {
+        std::ifstream in(path / "manifest.json");
+        std::ostringstream text;
+        text << in.rdbuf();
+        auto manifest = text.str();
+        const auto needle = std::string{"\"frame_count\": 2"};
+        const auto pos = manifest.find(needle);
+        require(pos != std::string::npos, "recovery fixture manifest frame count");
+        manifest.replace(pos, needle.size(), "\"frame_count\": 0");
+        std::ofstream out(path / "manifest.json", std::ios::trunc);
+        out << manifest;
+    }
+    {
+        std::ofstream out(path / "frames.idx", std::ios::binary | std::ios::app);
+        const std::array<char, 3> partial{'x', 'y', 'z'};
+        out.write(partial.data(), partial.size());
+    }
+    {
+        std::ofstream out(path / "frames.bin", std::ios::binary | std::ios::app);
+        const std::array<char, 2> junk{'q', 'r'};
+        out.write(junk.data(), junk.size());
+    }
+    {
+        std::ifstream in(path / "metadata.jsonl", std::ios::binary);
+        std::ostringstream text;
+        text << in.rdbuf();
+        const auto firstLineEnd = text.str().find('\n');
+        require(firstLineEnd != std::string::npos, "recovery fixture metadata");
+        std::filesystem::resize_file(path / "metadata.jsonl", firstLineEnd + 1, ec);
+        require(!ec, "truncate recovery metadata");
+        std::ofstream out(path / "metadata.jsonl", std::ios::binary | std::ios::app);
+        out << "{\"frame\":1";
+    }
+
+    const auto recovered = recoverBundle(path);
+    require(!recovered.wasComplete, "recovery fixture must be incomplete");
+    require(recovered.recoveredFrames == 2, "recover both complete indexed frames");
+    require(recovered.discardedIndexBytes == 3, "discard partial index record");
+    require(recovered.discardedPayloadBytes == 2, "discard unreferenced payload bytes");
+    require(recovered.discardedMetadataBytes > 0, "discard partial metadata line");
+    require(recovered.synthesizedMetadataFrames == 1, "synthesize missing metadata");
+
+    BundleReader reader(path);
+    require(!reader.manifest().complete, "recovered bundle remains marked incomplete");
+    require(reader.manifest().frameCount == 2, "recovered manifest frame count");
+    require(reader.readFrame(1).size() == pixels.size(), "recovered second payload");
+
+    std::ifstream metadataFile(path / "metadata.jsonl");
+    std::ostringstream metadataText;
+    metadataText << metadataFile.rdbuf();
+    require(metadataText.str().find("recovered_without_metadata") != std::string::npos,
+            "recovered metadata marker");
+
+    std::filesystem::remove_all(path, ec);
+}
+
 void bundleRoundTrip()
 {
     using namespace hscam;
@@ -152,6 +241,7 @@ int main()
         raw10Unpack();
         raw12Unpack();
         rawPartialGroups();
+        bundleRecovery();
         bundleRoundTrip();
         std::cout << "hscam unit tests passed\n";
         return 0;
