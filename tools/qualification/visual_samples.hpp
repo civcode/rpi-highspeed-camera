@@ -26,6 +26,7 @@ struct VisualSampleSpec {
     std::optional<std::string> modeId;
     std::optional<Rect> crop;
     std::optional<std::int64_t> frameDurationUs;
+    StreamKind streamKind{StreamKind::Raw};
     std::uint64_t frameCount{120};
     bool exact{};
     unsigned playbackFps{30};
@@ -83,7 +84,7 @@ inline VisualSampleResult captureVisualSample(const VisualSampleSpec &spec,
     auto camera = context.open(spec.cameraId);
 
     CaptureRequest request;
-    request.stream.kind = StreamKind::Raw;
+    request.stream.kind = spec.streamKind;
     request.negotiation = spec.exact ? NegotiationPolicy::Exact
                                      : NegotiationPolicy::AllowAdjustments;
     request.sensor.modeId = spec.modeId;
