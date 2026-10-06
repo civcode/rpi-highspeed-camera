@@ -1,5 +1,6 @@
 #include "promote.hpp"
 
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -25,7 +26,8 @@ void write(const fs::path &path, const std::string &text)
     out << text;
 }
 
-void createRun(const fs::path &run, std::string sourceRevision)
+void createRun(const fs::path &run, std::string sourceRevision,
+               std::string sensor = "imx296")
 {
     const std::string campaign =
         R"({"schema_version":1,"campaign":"official-rpi-cameras-v1","visual_samples":{"enabled":true}})";
@@ -44,7 +46,8 @@ void createRun(const fs::path &run, std::string sourceRevision)
               version + R"(","source_revision":")" + sourceRevision +
               R"(","cases":[{"case_id":"case0"}]})");
     write(run / "camera.json",
-          R"({"schema_version":1,"id":"camera0","model":"imx296","sensor_model":"imx296"})");
+          std::string{R"({"schema_version":1,"id":"camera0","model":")"} +
+          sensor + R"(","sensor_model":")" + sensor + R"("})");
     write(run / "mode_sensor_crops.json",
           R"({"schema_version":1,"camera_id":"camera0","modes":[]})");
     write(run / "environment.json",
@@ -226,6 +229,47 @@ void rejectMissingTimingEvidence()
     fs::remove_all(base, ec);
 }
 
+void auditOfficialDatasetCoverage()
+{
+    const auto base =
+        fs::temp_directory_path() / "hscam-promotion-test-audit";
+    const auto results = base / "results";
+    std::error_code ec;
+    fs::remove_all(base, ec);
+
+    createRun(base / "run-imx296", "0123456789abcdef", "imx296");
+    (void)hscam::qualification::promoteQualificationRun(
+        base / "run-imx296", results);
+
+    const std::array<const char *, 5> blocked{
+        "ov5647", "imx219", "imx708", "imx477", "imx500"
+    };
+    for (const auto *sensor : blocked) {
+        write(results / "blocked" / sensor / "blocked.json",
+              std::string{
+                  R"({"schema_version":1,"campaign":"official-rpi-cameras-v1","sensor":")"} +
+                  sensor +
+                  R"(","status":"blocked","reason":"hardware unavailable for campaign"})");
+    }
+
+    const auto audit =
+        hscam::qualification::auditOfficialDataset(results);
+    require(audit.complete(),
+            "published or explicitly blocked sensors must satisfy dataset gate");
+    require(audit.resultsBySensor.at("imx296").size() == 1,
+            "published IMX296 result must be counted");
+    require(audit.blockedBySensor.at("imx500").size() == 1,
+            "blocked IMX500 record must be counted");
+
+    fs::remove(results / "blocked" / "imx500" / "blocked.json", ec);
+    const auto incomplete =
+        hscam::qualification::auditOfficialDataset(results);
+    require(!incomplete.complete(),
+            "missing official sensor must fail dataset gate");
+
+    fs::remove_all(base, ec);
+}
+
 void rejectRecoveryFailure()
 {
     const auto base =
@@ -261,6 +305,7 @@ int main()
         rejectTamperedPlanId();
         rejectMissingVisualVideo();
         rejectMissingTimingEvidence();
+        auditOfficialDatasetCoverage();
         rejectRecoveryFailure();
         std::cout << "hscam promotion tests passed\n";
         return 0;
