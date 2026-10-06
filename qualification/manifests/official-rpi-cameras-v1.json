@@ -3,18 +3,15 @@
   "campaign": "official-rpi-cameras-v1",
   "worker_timeout_ms": 30000,
   "require_zero_drops": true,
-
   "advertised_modes": {
     "enabled": true,
     "duration_ms": 5000
   },
-
   "crop_geometry": {
     "enabled": true,
     "verify_cartesian": true,
     "max_cartesian_checks": 0
   },
-
   "crop_performance": {
     "enabled": true,
     "strategy": "all_heights_full_width",
@@ -22,14 +19,12 @@
     "exact": true,
     "max_cases": 0
   },
-
   "explicit_crops": {
     "enabled": false,
     "duration_ms": 5000,
     "exact": true,
     "crops": []
   },
-
   "fps_search": {
     "enabled": true,
     "min_frame_duration_us": 100,
@@ -39,5 +34,13 @@
     "max_iterations": 16,
     "tolerance_us": 2,
     "achieved_ratio": 0.99
+  },
+  "environment": {
+    "require_no_throttling": true
+  },
+  "visual_samples": {
+    "enabled": true,
+    "fastest_frame_count": 120,
+    "playback_fps": 30
   }
 }
