@@ -3,6 +3,7 @@
 #include "hscam/version.hpp"
 #include "internal/json.hpp"
 #include "crop_geometry.hpp"
+#include "visual_samples.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -62,6 +63,11 @@ struct Policy {
     std::uint64_t fpsMaxIterations{16};
     std::uint64_t fpsToleranceUs{2};
     double fpsAchievedRatio{0.99};
+
+    bool requireNoThrottling{true};
+    bool visualSamplesEnabled{true};
+    std::uint64_t visualSampleFrames{120};
+    unsigned visualPlaybackFps{30};
 };
 
 struct TestCase {
@@ -282,6 +288,19 @@ Policy parsePolicy(const Value &root)
         if (!(policy.fpsAchievedRatio > 0.0 && policy.fpsAchievedRatio <= 1.0))
             throw std::runtime_error("fps_search achieved_ratio must be in (0,1]");
     }
+
+    if (const auto *environment = root.find("environment"))
+        policy.requireNoThrottling = boolOr(*environment, "require_no_throttling", true);
+
+    if (const auto *visual = root.find("visual_samples")) {
+        policy.visualSamplesEnabled = boolOr(*visual, "enabled", true);
+        policy.visualSampleFrames = uintOr(*visual, "fastest_frame_count", 120);
+        policy.visualPlaybackFps = static_cast<unsigned>(
+            uintOr(*visual, "playback_fps", 30));
+        if (!policy.visualPlaybackFps)
+            throw std::runtime_error("visual_samples playback_fps must be positive");
+    }
+
     return policy;
 }
 
@@ -399,6 +418,23 @@ Value environmentValue()
         environment["vcgencmd_get_throttled"] = nullptr;
 
     return environment;
+}
+
+bool throttlingClean()
+{
+    const auto value = runCommand({"vcgencmd", "get_throttled"});
+    return value && trim(*value) == "throttled=0x0";
+}
+
+void requireCleanThrottling(std::string_view phase)
+{
+    const auto value = runCommand({"vcgencmd", "get_throttled"});
+    if (!value)
+        throw std::runtime_error("cannot verify throttling state during " +
+                                 std::string(phase) + ": vcgencmd unavailable");
+    if (trim(*value) != "throttled=0x0")
+        throw std::runtime_error("Pi throttling state is not clean during " +
+                                 std::string(phase) + ": " + trim(*value));
 }
 
 Value captureConfigurationValue(const hscam::CaptureConfiguration &config)
@@ -959,6 +995,104 @@ void generateAggregate(const fs::path &output, std::string_view planId,
     writeText(output / "report.md", report.str());
 }
 
+std::optional<std::size_t> findFastestCase(const fs::path &output,
+                                           const std::vector<TestCase> &cases)
+{
+    std::optional<std::size_t> best;
+    double bestFps{};
+    for (std::size_t i = 0; i < cases.size(); ++i) {
+        const auto resultPath = output / "cases" / (cases[i].id + ".json");
+        if (!fs::exists(resultPath)) continue;
+        const auto result = hscam::internal::json::parse(readAll(resultPath));
+        if (result.at("status").asString() != "pass") continue;
+        const auto fps = resultBestFps(result);
+        if (fps && (!best || *fps > bestFps)) {
+            best = i;
+            bestFps = *fps;
+        }
+    }
+    return best;
+}
+
+std::optional<std::size_t> findBaselineCase(const fs::path &output,
+                                            const std::vector<TestCase> &cases,
+                                            const hscam::CameraInfo &camera)
+{
+    std::optional<std::size_t> best;
+    std::uint64_t bestArea{};
+    for (std::size_t i = 0; i < cases.size(); ++i) {
+        if (!cases[i].modeId || cases[i].crop) continue;
+        const auto resultPath = output / "cases" / (cases[i].id + ".json");
+        if (!fs::exists(resultPath)) continue;
+        const auto result = hscam::internal::json::parse(readAll(resultPath));
+        if (result.at("status").asString() != "pass") continue;
+
+        const auto mode = std::find_if(camera.sensorModes.begin(), camera.sensorModes.end(),
+            [&](const auto &candidate) { return candidate.id == *cases[i].modeId; });
+        if (mode == camera.sensorModes.end()) continue;
+        const auto area = mode->size.area();
+        if (!best || area > bestArea) {
+            best = i;
+            bestArea = area;
+        }
+    }
+    return best;
+}
+
+void generateVisualSamples(const fs::path &output,
+                           const hscam::CameraInfo &camera,
+                           const std::vector<TestCase> &cases,
+                           const Policy &policy)
+{
+    if (!policy.visualSamplesEnabled || cases.empty())
+        return;
+
+    const auto executable = fs::canonical("/proc/self/exe");
+    const auto exporter = executable.parent_path() / "hscam-export";
+    const auto samplesDirectory = output / "samples";
+    fs::create_directories(samplesDirectory);
+
+    Value::Array sampleResults;
+
+    auto capture = [&](std::string label, std::size_t index, std::uint64_t frameCount) {
+        const auto &test = cases[index];
+        const auto resultPath = output / "cases" / (test.id + ".json");
+        const auto result = hscam::internal::json::parse(readAll(resultPath));
+
+        hscam::qualification::VisualSampleSpec spec;
+        spec.label = std::move(label);
+        spec.cameraId = camera.id;
+        spec.cameraModel = camera.model;
+        spec.modeId = test.modeId;
+        spec.crop = test.crop;
+        spec.frameDurationUs = resultBestDurationUs(result);
+        spec.frameCount = std::max<std::uint64_t>(1, frameCount);
+        spec.exact = test.exact;
+        spec.playbackFps = policy.visualPlaybackFps;
+
+        try {
+            const auto sample = hscam::qualification::captureVisualSample(
+                spec, samplesDirectory, exporter);
+            sampleResults.push_back(
+                hscam::qualification::visualSampleValue(sample, output));
+        } catch (const std::exception &e) {
+            sampleResults.emplace_back(Value::Object{
+                {"label", spec.label},
+                {"error", e.what()}
+            });
+        }
+    };
+
+    if (const auto baseline = findBaselineCase(output, cases, camera))
+        capture("baseline", *baseline, 1);
+
+    if (const auto fastest = findFastestCase(output, cases))
+        capture("fastest", *fastest, policy.visualSampleFrames);
+
+    writeText(output / "samples.json",
+              hscam::internal::json::stringify(Value(std::move(sampleResults)), 2) + "\n");
+}
+
 void usage()
 {
     std::cerr
@@ -997,6 +1131,10 @@ int runMain(const fs::path &manifestPath, const fs::path &output,
 
     fs::create_directories(output / "cases");
     fs::create_directories(output / "work");
+
+    if (policy.requireNoThrottling)
+        requireCleanThrottling("campaign start");
+
     writeText(output / "campaign.json", manifestText);
     writeText(output / "environment.json",
               hscam::internal::json::stringify(environmentValue(), 2) + "\n");
@@ -1089,7 +1227,29 @@ int runMain(const fs::path &manifestPath, const fs::path &output,
     }
 
     generateAggregate(output, planId, cases);
+    generateVisualSamples(output, camera, cases, policy);
+
+    writeText(output / "environment_end.json",
+              hscam::internal::json::stringify(environmentValue(), 2) + "\n");
+
+    bool campaignValid = true;
+    std::string invalidReason;
+    if (policy.requireNoThrottling && !throttlingClean()) {
+        campaignValid = false;
+        invalidReason = "Pi reported throttling by campaign end";
+    }
+
+    const Value campaignStatus = Value::Object{
+        {"schema_version", static_cast<std::uint64_t>(1)},
+        {"valid", campaignValid},
+        {"reason", invalidReason.empty() ? Value(nullptr) : Value(invalidReason)}
+    };
+    writeText(output / "campaign_status.json",
+              hscam::internal::json::stringify(campaignStatus, 2) + "\n");
+
     std::cout << "qualification output: " << output << "\n";
+    if (!campaignValid)
+        throw std::runtime_error(invalidReason);
     return 0;
 }
 
