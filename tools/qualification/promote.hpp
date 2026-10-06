@@ -232,14 +232,33 @@ inline PromotionResult promoteQualificationRun(
             requireSchemaVersion1(
                 samplesDocument, "visual samples");
 
-            for (const auto &sample :
-                 samplesDocument.at("samples").asArray()) {
+            const auto &samples =
+                samplesDocument.at("samples").asArray();
+            if (samples.empty())
+                throw std::runtime_error(
+                    "visual_samples are enabled but no visual evidence was generated");
+
+            bool hasVideoEvidence = false;
+            for (const auto &sample : samples) {
                 if (const auto *error = sample.find("error");
                     error && !error->isNull())
                     throw std::runtime_error(
                         "refusing to promote a run with visual-sample "
                         "errors: " + error->asString());
+
+                const auto *pngs = sample.find("pngs");
+                if (!pngs || !pngs->isArray() || pngs->asArray().empty())
+                    throw std::runtime_error(
+                        "refusing to promote a visual sample without PNG evidence");
+
+                if (const auto *video = sample.find("video");
+                    video && !video->isNull())
+                    hasVideoEvidence = true;
             }
+
+            if (!hasVideoEvidence)
+                throw std::runtime_error(
+                    "visual_samples are enabled but no video evidence was generated");
         }
     }
 
