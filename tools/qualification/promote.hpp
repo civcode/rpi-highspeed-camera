@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -109,6 +110,75 @@ inline void requireSchemaVersion1(const internal::json::Value &value,
     if (value.at("schema_version").asUInt64() != 1)
         throw std::runtime_error(
             "unsupported " + std::string(artifact) + " schema version");
+}
+
+inline std::filesystem::path requireRunRelativeFile(
+    const std::filesystem::path &run, std::string_view value,
+    std::string_view description)
+{
+    namespace fs = std::filesystem;
+    const fs::path relative(value);
+    if (relative.empty() || relative.is_absolute()) {
+        throw std::runtime_error(
+            std::string(description) + " path is not run-relative");
+    }
+    for (const auto &part : relative) {
+        if (part == "..")
+            throw std::runtime_error(
+                std::string(description) + " path escapes the run directory");
+    }
+    const auto path = run / relative;
+    if (!fs::is_regular_file(path))
+        throw std::runtime_error(
+            std::string(description) + " file is missing: " + path.string());
+    return path;
+}
+
+inline void validateQualificationEvidence(
+    const std::filesystem::path &run,
+    const internal::json::Value &plan,
+    const internal::json::Value &results)
+{
+    namespace fs = std::filesystem;
+    std::set<std::string> planned;
+    for (const auto &entry : plan.at("cases").asArray())
+        planned.insert(entry.at("case_id").asString());
+
+    std::set<std::string> aggregated;
+    for (const auto &entry : results.at("results").asArray())
+        aggregated.insert(entry.at("case_id").asString());
+
+    if (planned != aggregated)
+        throw std::runtime_error(
+            "results.json case set does not match plan.json");
+
+    for (const auto &caseId : planned) {
+        const auto casePath = run / "cases" / (caseId + ".json");
+        if (!fs::is_regular_file(casePath))
+            throw std::runtime_error(
+                "missing per-case qualification result: " + casePath.string());
+
+        const auto result =
+            internal::json::parse(promotionReadText(casePath));
+        if (result.at("status").asString() != "pass")
+            continue;
+
+        fs::path tracePath;
+        if (const auto *trace = result.find("timing_trace");
+            trace && !trace->isNull()) {
+            tracePath = casePath.parent_path() / trace->asString();
+        } else if (const auto *finalResult = result.find("final_result");
+                   finalResult && finalResult->isObject()) {
+            if (const auto *trace = finalResult->find("timing_trace");
+                trace && !trace->isNull())
+                tracePath = run / "search" / caseId / trace->asString();
+        }
+
+        if (tracePath.empty() || !fs::is_regular_file(tracePath) ||
+            fs::file_size(tracePath) == 0)
+            throw std::runtime_error(
+                "passing case lacks per-frame timing evidence: " + caseId);
+    }
 }
 
 inline void copyPromotionFile(const std::filesystem::path &source,
@@ -217,6 +287,8 @@ inline PromotionResult promoteQualificationRun(
         throw std::runtime_error(
             "results.json plan_id does not match qualification plan");
 
+    validateQualificationEvidence(run, plan, results);
+
     if (const auto *visual =
             campaignDocument.find("visual_samples");
         visual && visual->isObject()) {
@@ -250,10 +322,16 @@ inline PromotionResult promoteQualificationRun(
                 if (!pngs || !pngs->isArray() || pngs->asArray().empty())
                     throw std::runtime_error(
                         "refusing to promote a visual sample without PNG evidence");
+                for (const auto &png : pngs->asArray())
+                    (void)requireRunRelativeFile(
+                        run, png.asString(), "visual PNG");
 
                 if (const auto *video = sample.find("video");
-                    video && !video->isNull())
+                    video && !video->isNull()) {
+                    (void)requireRunRelativeFile(
+                        run, video->asString(), "visual video");
                     hasVideoEvidence = true;
+                }
             }
 
             if (!hasVideoEvidence)
