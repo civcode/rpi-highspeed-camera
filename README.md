@@ -180,21 +180,32 @@ build/hscam-qualify run \
 The campaign is intentionally much more rigorous than an interactive benchmark. It:
 
 - fingerprints the board, OS, kernel, libcamera version and source revision;
+- freezes a deterministic plan ID and refuses to resume into output from a
+  different plan;
 - rejects the official run if the Pi reports a non-clean throttling state;
 - enumerates all advertised raw modes;
-- discovers mutable sensor-crop geometry with V4L2 TRY negotiation;
+- discovers mutable sensor-crop geometry with V4L2 TRY negotiation and keeps
+  every requested/negotiated probe as JSONL evidence;
+- records the active sensor crop associated with every advertised raw mode;
 - checks width/height combinations and origin alignment;
 - measures crop performance across every accepted height and representative widths;
 - samples corner/center crop positions;
 - searches for the smallest stable frame duration rather than trusting requested FPS;
+- rejects a boundary when a single sensor-timestamp interval exceeds the
+  campaign jitter limit, even if average FPS looks acceptable;
 - performs a longer final validation at the discovered boundary;
 - runs risky captures in isolated worker processes with hard timeouts;
 - performs a known-good recovery capture after failures;
 - resumes completed cases after interruption;
-- writes JSON, CSV and Markdown results;
+- writes JSON, CSV and Markdown results plus per-frame timing JSONL for every
+  completed capture probe;
 - captures representative raw/PNG/DNG/video evidence only after timing tests.
 
 This campaign can be long. It is intended to be run once per official camera/software environment to produce the public dataset, not as a routine application command.
+
+The official v1 campaign requires a local `ffmpeg` executable because a
+slow-motion video is part of the visual publication evidence. DNG generation
+remains optional and depends on libtiff.
 
 ## Qualification output
 
@@ -207,13 +218,20 @@ qualification/work/<camera>/
     environment.json
     environment_end.json
     camera.json
+    mode_sensor_crops.json
     crop_geometry.json
+    crop_geometry_probes.jsonl
     campaign_status.json
     results.json
     results.csv
     report.md
     cases/
+        <case-id>.json
+        <case-id>.timing.jsonl
     search/
+        <case-id>/
+            <probe>.json
+            <probe>.timing.jsonl
     samples/
         baseline.hscap/
         baseline-frame-0.png
@@ -230,7 +248,11 @@ build/hscam-qualify promote \
   --results-root qualification/results
 ```
 
-The promotion command enforces the publication gate and omits large raw `.hscap` sample bundles while retaining result provenance and derived visual evidence. Full promotion rules live in [qualification/results/README.md](qualification/results/README.md).
+The promotion command recomputes plan provenance, verifies the aggregate
+against the frozen case plan, requires per-frame timing evidence for passing
+cases, verifies visual files, retains case/search/crop-probe audit data, and
+omits only the large raw `.hscap` sample bundles. Full promotion rules live in
+[qualification/results/README.md](qualification/results/README.md).
 
 ## Design documents
 
