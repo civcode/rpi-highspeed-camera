@@ -1395,6 +1395,99 @@ void generateVisualSamples(const fs::path &output,
               hscam::internal::json::stringify(samples, 2) + "\n");
 }
 
+bool validatePassTimingEvidence(const fs::path &output,
+                                const std::vector<TestCase> &cases,
+                                std::string &reason)
+{
+    for (const auto &test : cases) {
+        const auto resultPath = output / "cases" / (test.id + ".json");
+        if (!fs::exists(resultPath)) {
+            reason = "missing result for " + test.id;
+            return false;
+        }
+
+        const auto result =
+            hscam::internal::json::parse(readAll(resultPath));
+        if (result.at("status").asString() != "pass")
+            continue;
+
+        fs::path trace;
+        if (const auto *name = result.find("timing_trace");
+            name && !name->isNull()) {
+            trace = resultPath.parent_path() / name->asString();
+        } else if (const auto *finalResult = result.find("final_result");
+                   finalResult && finalResult->isObject()) {
+            if (const auto *name = finalResult->find("timing_trace");
+                name && !name->isNull())
+                trace = output / "search" / test.id / name->asString();
+        }
+
+        if (trace.empty() || !fs::exists(trace) ||
+            fs::file_size(trace) == 0) {
+            reason = "missing per-frame timing evidence for pass case " +
+                     test.id;
+            return false;
+        }
+    }
+    return true;
+}
+
+bool validateVisualEvidence(const fs::path &output, std::string &reason)
+{
+    const auto path = output / "samples.json";
+    if (!fs::exists(path)) {
+        reason = "visual sampling enabled but samples.json is missing";
+        return false;
+    }
+
+    const auto document =
+        hscam::internal::json::parse(readAll(path));
+    const auto &samples = document.at("samples").asArray();
+    if (samples.empty()) {
+        reason = "visual sampling enabled but no samples were generated";
+        return false;
+    }
+
+    bool hasVideo = false;
+    for (const auto &sample : samples) {
+        if (const auto *error = sample.find("error");
+            error && !error->isNull()) {
+            reason = "visual sample error: " + error->asString();
+            return false;
+        }
+
+        const auto *pngs = sample.find("pngs");
+        if (!pngs || !pngs->isArray() || pngs->asArray().empty()) {
+            reason = "visual sample has no PNG evidence";
+            return false;
+        }
+
+        for (const auto &png : pngs->asArray()) {
+            if (!fs::exists(output / png.asString())) {
+                reason = "visual PNG evidence file is missing: " +
+                         png.asString();
+                return false;
+            }
+        }
+
+        if (const auto *video = sample.find("video");
+            video && !video->isNull()) {
+            if (!fs::exists(output / video->asString())) {
+                reason = "visual video evidence file is missing: " +
+                         video->asString();
+                return false;
+            }
+            hasVideo = true;
+        }
+    }
+
+    if (!hasVideo) {
+        reason = "visual sampling enabled but no video evidence was generated";
+        return false;
+    }
+    return true;
+}
+
 void usage()
 {
     std::cerr
@@ -1639,7 +1732,16 @@ int runMain(const fs::path &manifestPath, const fs::path &output,
 
     bool campaignValid = true;
     std::string invalidReason;
-    if (policy.requireNoThrottling && !throttlingClean()) {
+
+    if (!validatePassTimingEvidence(output, cases, invalidReason))
+        campaignValid = false;
+
+    if (campaignValid && policy.visualSamplesEnabled &&
+        !validateVisualEvidence(output, invalidReason))
+        campaignValid = false;
+
+    if (campaignValid && policy.requireNoThrottling &&
+        !throttlingClean()) {
         campaignValid = false;
         invalidReason = "Pi reported throttling by campaign end";
     }
