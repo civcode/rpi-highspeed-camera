@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.20)
 project(rpi_highspeed_camera VERSION 0.1.0 LANGUAGES CXX)
 
+include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -49,6 +52,7 @@ add_library(hscam_raw
     src/raw/render.cpp
 )
 add_library(hscam::raw ALIAS hscam_raw)
+set_target_properties(hscam_raw PROPERTIES EXPORT_NAME raw)
 target_include_directories(hscam_raw PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include> $<INSTALL_INTERFACE:include>)
 target_compile_features(hscam_raw PUBLIC cxx_std_20)
 target_compile_options(hscam_raw PRIVATE -Wall -Wextra -Wpedantic)
@@ -100,6 +104,50 @@ target_link_libraries(hscam-qualify PRIVATE hscam::hscam hscam::raw)
 target_include_directories(hscam-qualify PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_definitions(hscam-qualify PRIVATE HSCAM_SOURCE_REVISION="${HSCAM_SOURCE_REVISION}")
 target_compile_options(hscam-qualify PRIVATE -Wall -Wextra -Wpedantic)
+
+
+# Installable v0.1 library/tooling package.
+set(HSCAM_CONFIG_REQUIRES_LIBCAMERA ${LIBCAMERA_FOUND})
+configure_package_config_file(
+    cmake/hscamConfig.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/hscamConfig.cmake
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/hscam
+)
+write_basic_package_version_file(
+    ${CMAKE_CURRENT_BINARY_DIR}/hscamConfigVersion.cmake
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY SameMajorVersion
+)
+
+install(
+    TARGETS hscam hscam_raw
+    EXPORT hscamTargets
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+)
+install(
+    TARGETS hscam-inspect hscam-capture hscam-export hscam-qualify
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+install(
+    DIRECTORY include/
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    FILES_MATCHING PATTERN "*.hpp"
+)
+install(
+    EXPORT hscamTargets
+    FILE hscamTargets.cmake
+    NAMESPACE hscam::
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/hscam
+)
+install(
+    FILES
+        ${CMAKE_CURRENT_BINARY_DIR}/hscamConfig.cmake
+        ${CMAKE_CURRENT_BINARY_DIR}/hscamConfigVersion.cmake
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/hscam
+)
 
 if(HSCAM_BUILD_TESTS)
     enable_testing()
