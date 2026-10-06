@@ -215,9 +215,12 @@ private:
 };
 
 struct SessionState : public std::enable_shared_from_this<SessionState> {
-    explicit SessionState(std::shared_ptr<libcamera::Camera> camera, libcamera::Stream *stream,
+    explicit SessionState(std::shared_ptr<Context::Impl> owner,
+                          std::shared_ptr<libcamera::Camera> camera,
+                          libcamera::Stream *stream,
                           CaptureConfiguration config)
-        : camera(std::move(camera)), stream(stream), config(std::move(config)), completed(64)
+        : owner(std::move(owner)), camera(std::move(camera)), stream(stream),
+          config(std::move(config)), completed(64)
     {
     }
 
@@ -532,6 +535,9 @@ struct SessionState : public std::enable_shared_from_this<SessionState> {
         return stats;
     }
 
+    // Keep the CameraManager-owning context alive for the entire session,
+    // including any FrameLease objects that outlive Camera.
+    std::shared_ptr<Context::Impl> owner;
     std::shared_ptr<libcamera::Camera> camera;
     libcamera::Stream *stream{};
     CaptureConfiguration config;
@@ -752,7 +758,7 @@ public:
     {
         if (!configured_ || !stream_)
             throw CaptureFailed("camera must be configured before start");
-        auto state = std::make_shared<SessionState>(camera_, stream_, actual_);
+        auto state = std::make_shared<SessionState>(owner_, camera_, stream_, actual_);
         state->initialize();
         actual_ = state->config;
         return CaptureSession(std::make_unique<LibcameraSession>(std::move(state)));
