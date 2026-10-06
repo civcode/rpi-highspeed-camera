@@ -45,6 +45,8 @@ void createRun(const fs::path &run, std::string sourceRevision)
               R"(","cases":[{"case_id":"case0"}]})");
     write(run / "camera.json",
           R"({"schema_version":1,"id":"camera0","model":"imx296","sensor_model":"imx296"})");
+    write(run / "mode_sensor_crops.json",
+          R"({"schema_version":1,"camera_id":"camera0","modes":[]})");
     write(run / "environment.json",
           R"({"schema_version":1,"board_model":"Raspberry Pi 5 Model B"})");
     write(run / "environment_end.json",
