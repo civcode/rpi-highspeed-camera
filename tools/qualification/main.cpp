@@ -1404,6 +1404,59 @@ void usage()
         << "  hscam-qualify --worker CASE.json RESULT.json\n";
 }
 
+void resetQualificationOutput(const fs::path &output)
+{
+    std::error_code ec;
+    for (const auto &directory : {"cases", "search", "work", "samples"}) {
+        fs::remove_all(output / directory, ec);
+        if (ec)
+            throw std::runtime_error(
+                "failed to clear qualification directory " +
+                (output / directory).string() + ": " + ec.message());
+    }
+
+    for (const auto &file : {
+             "campaign.json", "plan.json", "environment.json",
+             "environment_end.json", "camera.json", "mode_sensor_crops.json",
+             "crop_geometry.json", "crop_geometry_probes.jsonl",
+             "campaign_status.json", "results.json", "results.csv",
+             "report.md", "samples.json", "recovery_failure.json"}) {
+        ec.clear();
+        fs::remove(output / file, ec);
+        if (ec)
+            throw std::runtime_error(
+                "failed to clear qualification artifact " +
+                (output / file).string() + ": " + ec.message());
+    }
+}
+
+void validateResumePlan(const fs::path &output, std::string_view planId,
+                        bool rerun)
+{
+    if (rerun) {
+        resetQualificationOutput(output);
+        return;
+    }
+
+    const auto planPath = output / "plan.json";
+    if (fs::exists(planPath)) {
+        const auto existing =
+            hscam::internal::json::parse(readAll(planPath));
+        if (existing.at("plan_id").asString() != planId)
+            throw std::runtime_error(
+                "qualification output belongs to a different plan; "
+                "use --rerun or a new output directory");
+        return;
+    }
+
+    for (const auto &directory : {"cases", "search", "work", "samples"}) {
+        if (fs::exists(output / directory))
+            throw std::runtime_error(
+                "qualification output contains generated state without "
+                "plan.json; use --rerun or a new output directory");
+    }
+}
+
 int runMain(const fs::path &manifestPath, const fs::path &output,
             const std::string &cameraIdArg, bool rerun)
 {
@@ -1429,9 +1482,13 @@ int runMain(const fs::path &manifestPath, const fs::path &output,
         throw std::runtime_error("selected camera is not present: " + cameraId);
     const auto &camera = *it;
 
-    const std::string planId = fnvHex(manifestText + "\n" + camera.id + "\n" +
-                                      HSCAM_VERSION_STRING + "\n" + HSCAM_SOURCE_REVISION);
+    const std::string planId =
+        hscam::qualification::qualificationPlanId(
+            manifestText, camera.id, HSCAM_VERSION_STRING,
+            HSCAM_SOURCE_REVISION);
 
+    fs::create_directories(output);
+    validateResumePlan(output, planId, rerun);
     fs::create_directories(output / "cases");
     fs::create_directories(output / "work");
 
