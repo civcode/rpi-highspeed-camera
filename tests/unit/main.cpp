@@ -46,6 +46,55 @@ void rawPartialGroups()
     const std::array<std::byte,2> twelve{std::byte{0x12},std::byte{0x03}}; const auto decoded12=raw::decodeRaw(raw12,twelve); require(decoded12.pixels.size()==1&&decoded12.pixels[0]==0x123,"partial RAW12 group");
 }
 
+void bundleRejectsTrailingPayload()
+{
+    using namespace hscam;
+    const auto path = std::filesystem::temp_directory_path() /
+                      "hscam-validation-unit.hscap";
+    std::error_code ec;
+    std::filesystem::remove_all(path, ec);
+
+    CaptureConfiguration cfg;
+    cfg.stream.kind = StreamKind::Raw;
+    cfg.stream.size = {2, 1};
+    cfg.stream.format = {"SRGGB8"};
+    cfg.stream.frameBytes = 2;
+
+    std::array<std::byte, 2> pixels{std::byte{1}, std::byte{2}};
+    PlaneView plane{pixels, 2, 2, -1};
+    FrameMetadata metadata;
+    metadata.sequence = 1;
+
+    {
+        BundleWriter writer(path, "test-camera", "synthetic", cfg);
+        writer.append(metadata, std::span<const PlaneView>(&plane, 1));
+        writer.finalize();
+    }
+
+    {
+        std::ofstream out(path / "frames.bin", std::ios::binary | std::ios::app);
+        out.put('x');
+    }
+
+    bool rejected = false;
+    try {
+        BundleReader reader(path);
+        (void)reader;
+    } catch (const Error &) {
+        rejected = true;
+    }
+    require(rejected, "reader must reject unindexed trailing payload");
+
+    const auto recovered = recoverBundle(path);
+    require(recovered.discardedPayloadBytes == 1,
+            "recovery must discard trailing payload");
+    BundleReader reader(path);
+    require(reader.manifest().frameCount == 1,
+            "recovered validation fixture frame count");
+
+    std::filesystem::remove_all(path, ec);
+}
+
 void bundleRecovery()
 {
     using namespace hscam; const auto path=std::filesystem::temp_directory_path()/"hscam-recovery-unit.hscap"; std::error_code ec; std::filesystem::remove_all(path,ec);
@@ -79,4 +128,4 @@ void bundleRoundTrip()
 }
 }
 
-int main(){try{geometryAndModeIds();raw10Unpack();raw12Unpack();rawPartialGroups();bundleRecovery();bundleRoundTrip();std::cout<<"hscam unit tests passed\n";return 0;}catch(const std::exception&e){std::cerr<<"unit test failed: "<<e.what()<<'\n';return 1;}}
+int main(){try{geometryAndModeIds();raw10Unpack();raw12Unpack();rawPartialGroups();bundleRejectsTrailingPayload();bundleRecovery();bundleRoundTrip();std::cout<<"hscam unit tests passed\n";return 0;}catch(const std::exception&e){std::cerr<<"unit test failed: "<<e.what()<<'\n';return 1;}}
