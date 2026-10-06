@@ -19,6 +19,7 @@ endif()
 
 add_library(hscam
     src/context.cpp
+    src/camera.cpp
     src/types.cpp
 )
 add_library(hscam::hscam ALIAS hscam)
@@ -43,6 +44,10 @@ endif()
 add_executable(hscam-inspect tools/inspect/main.cpp)
 target_link_libraries(hscam-inspect PRIVATE hscam::hscam)
 target_compile_options(hscam-inspect PRIVATE -Wall -Wextra -Wpedantic)
+
+add_executable(hscam-capture tools/capture/main.cpp)
+target_link_libraries(hscam-capture PRIVATE hscam::hscam)
+target_compile_options(hscam-capture PRIVATE -Wall -Wextra -Wpedantic)
 
 if(HSCAM_BUILD_TESTS)
     enable_testing()
