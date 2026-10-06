@@ -42,11 +42,24 @@ This project has not published its first stable release yet.
 - Added post-qualification visual sample capture.
 - Added guarded promotion of valid clean-revision runs into
   `qualification/results/`.
+- Added strict resume-plan identity so stale cases from another campaign or
+  revision cannot be reused accidentally.
+- Added mode-specific sensor-crop snapshots and full TRY-crop probe logs.
+- Added per-frame timing JSONL evidence for qualification probes.
+- Added a single-frame interval stability limit in addition to measured FPS
+  and sequence-gap checks.
+- Added deterministic plan provenance and publication-time evidence
+  verification for case results, timing traces and visual artifacts.
+- Reused the campaign's libcamera context for post-run visual sampling.
 
 ### Build and packaging
 
 - Added host-safe unit tests.
-- Added qualification promotion tests.
+- Added qualification promotion tests for provenance, visual evidence,
+  recovery failure and pass-case timing evidence.
+- Expanded raw reconstruction tests with padded stride, all Bayer orders,
+  crop-phase handling, exact bilinear fixtures, monochrome and truncation
+  checks.
 - Added an installable CMake package exporting `hscam::hscam` and
   `hscam::raw`.
 - Added optional command-line tool builds.
