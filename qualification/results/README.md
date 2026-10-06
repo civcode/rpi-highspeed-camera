@@ -34,13 +34,24 @@ qualification/results/
                 environment.json
                 environment_end.json
                 camera.json
+                mode_sensor_crops.json
                 crop_geometry.json
+                crop_geometry_probes.jsonl
                 campaign_status.json
                 results.json
                 results.csv
                 report.md
                 samples.json
                 published.json
+                cases/
+                    <case-id>.json
+                    <case-id>.timing.jsonl
+                    ...
+                search/
+                    <case-id>/
+                        <probe>.json
+                        <probe>.timing.jsonl
+                        ...
                 samples/
                     ...
 ```
@@ -53,11 +64,12 @@ A run may be copied from `qualification/work/` into this directory only when:
 
 - `campaign_status.json` reports `"valid": true`;
 - the source revision in `plan.json` is a clean committed revision, not `-dirty`;
-- the run used the intended committed campaign manifest;
+- the run used the intended committed campaign manifest and its deterministic plan ID recomputes from the manifest, camera, hscam version and clean source revision;
 - start/end environment snapshots are present;
-- the camera inventory and result aggregates are present;
+- the camera inventory, advertised-mode crop snapshot and result aggregates are present;
 - `recovery_failure.json` is absent;
-- visual sampling is present when enabled, and no visual sample records a generation/export error.
+- every passing case retains per-frame timing evidence and the aggregate case set matches the frozen plan;
+- visual sampling is present when enabled, every sample has PNG evidence, at least one video exists, and no visual sample records a generation/export error.
 
 Do not delete rejected, unsupported or unstable cases. They are part of the measured capability boundary.
 
@@ -65,7 +77,7 @@ Do not manually edit numeric test results during promotion. If a run is wrong, f
 
 ## Large artifacts
 
-The complete timing/configuration dataset and representative visual evidence should be kept with the promoted result.
+The complete timing/configuration dataset, raw crop-negotiation trace, per-case/FPS-search timing traces, and representative visual evidence are kept with the promoted result.
 
 Large raw HSCAP sequences do not have to be committed when doing so would make the repository impractical. If a raw sequence is omitted, keep:
 
