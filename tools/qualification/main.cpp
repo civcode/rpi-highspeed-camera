@@ -198,6 +198,18 @@ Value rectValue(const std::optional<hscam::Rect> &rect)
     };
 }
 
+Value cropProbeValue(const hscam::qualification::CropProbeRecord &record)
+{
+    Value::Object object{
+        {"phase", record.phase},
+        {"requested", rectValue(record.requested)},
+        {"negotiated", record.negotiated ? rectValue(*record.negotiated) : Value(nullptr)},
+        {"exact", record.exact},
+        {"error", record.error ? Value(*record.error) : Value(nullptr)}
+    };
+    return object;
+}
+
 std::optional<hscam::Rect> parseRect(const Value &value)
 {
     if (value.isNull()) return std::nullopt;
@@ -557,6 +569,44 @@ int workerMain(const fs::path &casePath, const fs::path &resultPath)
     return 0;
 }
 
+Value characterizeModeSensorCrops(hscam::Context &context,
+                                   const hscam::CameraInfo &camera)
+{
+    Value::Array modes;
+    for (const auto &mode : camera.sensorModes) {
+        Value::Object entry{
+            {"mode_id", mode.id},
+            {"width", static_cast<std::uint64_t>(mode.size.width)},
+            {"height", static_cast<std::uint64_t>(mode.size.height)},
+            {"pixel_format", mode.format.name}
+        };
+
+        try {
+            auto handle = context.open(camera.id);
+            hscam::CaptureRequest request;
+            request.stream.kind = hscam::StreamKind::Raw;
+            request.sensor.modeId = mode.id;
+            request.negotiation = hscam::NegotiationPolicy::AllowAdjustments;
+            const auto configuration = handle.configure(request);
+            entry["configuration"] = captureConfigurationValue(configuration);
+            entry["sensor_crop"] = rectValue(handle.currentSensorCrop());
+            entry["error"] = nullptr;
+        } catch (const std::exception &e) {
+            entry["configuration"] = nullptr;
+            entry["sensor_crop"] = nullptr;
+            entry["error"] = e.what();
+        }
+
+        modes.emplace_back(std::move(entry));
+    }
+
+    return Value::Object{
+        {"schema_version", static_cast<std::uint64_t>(1)},
+        {"camera_id", camera.id},
+        {"modes", std::move(modes)}
+    };
+}
+
 std::vector<TestCase> buildCases(const Policy &policy, const hscam::CameraInfo &camera,
                                  const hscam::qualification::CropGeometry *geometry)
 {
@@ -590,6 +640,20 @@ std::vector<TestCase> buildCases(const Policy &policy, const hscam::CameraInfo &
             test.exact = false;
             test.requireZeroDrops = policy.requireZeroDrops;
             test.id = "mode-" + testCaseKey(test);
+            cases.push_back(std::move(test));
+        }
+
+        // Some libcamera cameras may expose processed capture without an
+        // application-visible raw mode. They still need a baseline campaign
+        // case instead of silently producing an empty qualification plan.
+        if (camera.sensorModes.empty() && camera.capabilities.processedCapture) {
+            TestCase test;
+            test.cameraId = camera.id;
+            test.streamKind = hscam::StreamKind::Processed;
+            test.durationMs = policy.advertisedDurationMs;
+            test.exact = false;
+            test.requireZeroDrops = policy.requireZeroDrops;
+            test.id = "processed-default-" + testCaseKey(test);
             cases.push_back(std::move(test));
         }
     }
@@ -1292,12 +1356,31 @@ int runMain(const fs::path &manifestPath, const fs::path &output,
     writeText(output / "camera.json",
               hscam::internal::json::stringify(cameraValue(camera), 2) + "\n");
 
+    writeText(output / "mode_sensor_crops.json",
+              hscam::internal::json::stringify(
+                  characterizeModeSensorCrops(context, camera), 2) + "\n");
+
     std::optional<hscam::qualification::CropGeometry> geometry;
     if (policy.geometry.enabled) {
         {
+            std::ofstream probeLog(
+                output / "crop_geometry_probes.jsonl",
+                std::ios::binary | std::ios::trunc);
+            if (!probeLog)
+                throw std::runtime_error(
+                    "failed to create crop_geometry_probes.jsonl");
+
             auto cropCamera = context.open(camera.id);
             geometry = hscam::qualification::discoverCropGeometry(
-                cropCamera, camera, policy.geometry);
+                cropCamera, camera, policy.geometry,
+                [&](const hscam::qualification::CropProbeRecord &probe) {
+                    probeLog << hscam::internal::json::stringify(
+                                    cropProbeValue(probe))
+                             << '\n';
+                    if (!probeLog)
+                        throw std::runtime_error(
+                            "failed writing crop geometry probe log");
+                });
         }
         writeText(output / "crop_geometry.json",
                   hscam::internal::json::stringify(
