@@ -2,6 +2,7 @@
 #include "internal/backend.hpp"
 #include "internal/bounded_queue.hpp"
 #include "hscam/error.hpp"
+#include "media/sensor_subdevice.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -48,6 +49,21 @@ unsigned bitDepthFromFormat(const std::string &name)
     return 0;
 }
 
+std::vector<std::int64_t> systemDevices(const std::shared_ptr<libcamera::Camera> &camera)
+{
+    std::vector<std::int64_t> out;
+    if (auto devices = camera->properties().get(libcamera::properties::SystemDevices))
+        out.assign(devices->begin(), devices->end());
+    return out;
+}
+
+std::string cameraModel(const std::shared_ptr<libcamera::Camera> &camera)
+{
+    if (auto model = camera->properties().get(libcamera::properties::Model))
+        return std::string(*model);
+    return camera->id();
+}
+
 std::vector<SensorMode> enumerateRawModes(const std::shared_ptr<libcamera::Camera> &camera)
 {
     std::vector<SensorMode> modes;
@@ -84,6 +100,12 @@ std::vector<SensorMode> enumerateRawModes(const std::shared_ptr<libcamera::Camer
 std::string sizeString(const libcamera::Size &s)
 {
     return std::to_string(s.width) + "x" + std::to_string(s.height);
+}
+
+std::string rectString(const Rect &r)
+{
+    return std::to_string(r.x) + "," + std::to_string(r.y) + "+" +
+           std::to_string(r.width) + "x" + std::to_string(r.height);
 }
 
 void addAdjustment(std::vector<Adjustment> &out, std::string field, std::string requested,
@@ -432,6 +454,10 @@ public:
     LibcameraCamera(std::shared_ptr<Context::Impl> owner, std::shared_ptr<libcamera::Camera> camera)
         : owner_(std::move(owner)), camera_(std::move(camera)), id_(camera_->id())
     {
+        sensor_ = media::SensorSubdevice::discover(cameraModel(camera_), systemDevices(camera_));
+        if (sensor_)
+            initialSensorCrop_ = sensor_->currentCrop();
+
         const int rc = camera_->acquire();
         if (rc < 0)
             throw CameraBusy("failed to acquire camera " + id_ + ": " + std::to_string(rc));
@@ -441,6 +467,15 @@ public:
     {
         if (camera_)
             (void)camera_->release();
+
+        if (sensor_ && initialSensorCrop_) {
+            try {
+                sensor_->setFormatSize(initialSensorCrop_->size());
+                (void)sensor_->setCrop(*initialSensorCrop_);
+            } catch (...) {
+                // Destructors must not throw. Qualification code verifies recovery explicitly.
+            }
+        }
     }
 
     const std::string &id() const override { return id_; }
@@ -458,14 +493,33 @@ public:
             throw Unsupported("requested stream role is not supported by camera " + id_);
 
         auto &stream = config->at(0);
+
         if (request.sensor.modeId) {
             const auto modes = enumerateRawModes(camera_);
-            auto it = std::find_if(modes.begin(), modes.end(), [&](const SensorMode &m) { return m.id == *request.sensor.modeId; });
+            auto it = std::find_if(modes.begin(), modes.end(),
+                                   [&](const SensorMode &m) { return m.id == *request.sensor.modeId; });
             if (it == modes.end())
                 throw NegotiationFailed("unknown sensor mode id: " + *request.sensor.modeId);
             stream.size = libcamera::Size(it->size.width, it->size.height);
             stream.pixelFormat = libcamera::PixelFormat::fromString(it->format.name);
         }
+
+        std::optional<media::CropProbe> activeCrop;
+        if (request.sensor.crop) {
+            if (!sensor_ || !sensor_->info().capabilities.sensorCropSettable)
+                throw Unsupported("camera does not expose a mutable sensor crop");
+
+            const auto trial = sensor_->tryCrop(*request.sensor.crop);
+            if (request.negotiation == NegotiationPolicy::Exact && !trial.exact)
+                throw ExactConfigurationFailed("sensor adjusted the requested crop during TRY negotiation");
+
+            sensor_->setFormatSize(trial.negotiated.size());
+            activeCrop = sensor_->setCrop(trial.negotiated);
+
+            if (!request.stream.size)
+                stream.size = libcamera::Size(activeCrop->negotiated.width, activeCrop->negotiated.height);
+        }
+
         if (request.stream.size)
             stream.size = libcamera::Size(request.stream.size->width, request.stream.size->height);
         if (request.stream.format) {
@@ -487,7 +541,11 @@ public:
 
         CaptureConfiguration result;
         result.sensor.modeId = request.sensor.modeId;
-        result.sensor.crop = request.sensor.crop;
+        result.sensor.crop = activeCrop ? std::optional<Rect>(activeCrop->negotiated) : request.sensor.crop;
+        if (activeCrop && !activeCrop->exact)
+            addAdjustment(result.adjustments, "sensor.crop", rectString(activeCrop->requested),
+                          rectString(activeCrop->negotiated), AdjustmentSource::Sensor);
+
         result.stream.kind = request.stream.kind;
         result.stream.size = toSize(config->at(0).size);
         result.stream.format = {config->at(0).pixelFormat.toString()};
@@ -498,16 +556,34 @@ public:
         result.timing.exposure = request.timing.exposure;
         result.timing.analogueGain = request.timing.analogueGain;
 
-        addAdjustment(result.adjustments, "stream.size", sizeString(requestedSize), sizeString(config->at(0).size), AdjustmentSource::Libcamera);
-        addAdjustment(result.adjustments, "stream.format", requestedFormat.toString(), config->at(0).pixelFormat.toString(), AdjustmentSource::Libcamera);
-        addAdjustment(result.adjustments, "stream.bufferCount", std::to_string(requestedBuffers), std::to_string(config->at(0).bufferCount), AdjustmentSource::Libcamera);
+        addAdjustment(result.adjustments, "stream.size", sizeString(requestedSize),
+                      sizeString(config->at(0).size), AdjustmentSource::Libcamera);
+        addAdjustment(result.adjustments, "stream.format", requestedFormat.toString(),
+                      config->at(0).pixelFormat.toString(), AdjustmentSource::Libcamera);
+        addAdjustment(result.adjustments, "stream.bufferCount", std::to_string(requestedBuffers),
+                      std::to_string(config->at(0).bufferCount), AdjustmentSource::Libcamera);
 
         if (request.negotiation == NegotiationPolicy::Exact && !result.adjustments.empty())
-            throw ExactConfigurationFailed("libcamera adjusted an exact capture request");
+            throw ExactConfigurationFailed("capture negotiation adjusted an exact request");
 
         const int rc = camera_->configure(config.get());
         if (rc < 0)
             throw NegotiationFailed("Camera::configure failed: " + std::to_string(rc));
+
+        if (request.sensor.crop && sensor_) {
+            auto after = sensor_->currentCrop();
+            if (!after)
+                throw NegotiationFailed("sensor crop became unreadable after libcamera configure");
+
+            result.sensor.crop = *after;
+            const Rect expected = activeCrop ? activeCrop->negotiated : *request.sensor.crop;
+            if (*after != expected) {
+                addAdjustment(result.adjustments, "sensor.crop.post_config", rectString(expected),
+                              rectString(*after), AdjustmentSource::Sensor);
+                if (request.negotiation == NegotiationPolicy::Exact)
+                    throw ExactConfigurationFailed("libcamera changed the exact sensor crop during configuration");
+            }
+        }
 
         stream_ = config->at(0).stream();
         if (!stream_)
@@ -540,6 +616,8 @@ private:
     std::shared_ptr<libcamera::Camera> camera_;
     std::string id_;
     std::unique_ptr<libcamera::CameraConfiguration> config_;
+    std::optional<media::SensorSubdevice> sensor_;
+    std::optional<Rect> initialSensorCrop_;
     libcamera::Stream *stream_{};
     CaptureConfiguration actual_;
     bool configured_{};
@@ -579,6 +657,20 @@ public:
             } else {
                 info.model = camera->id();
             }
+
+            info.systemDevices = systemDevices(camera);
+            if (auto sensor = media::SensorSubdevice::discover(info.model, info.systemDevices)) {
+                info.sensorSubdevice = sensor->info().deviceNode;
+                const auto &caps = sensor->info().capabilities;
+                info.capabilities.sensorCropQueryable = caps.sensorCropQueryable;
+                info.capabilities.sensorCropTryable = caps.sensorCropTryable;
+                info.capabilities.sensorCropSettable = caps.sensorCropSettable;
+                info.capabilities.sensorCropExact = caps.sensorCropExact;
+                info.capabilities.sensorNativeSize = caps.sensorNativeSize;
+                info.capabilities.sensorCropBounds = caps.sensorCropBounds;
+                info.capabilities.sensorDefaultCrop = caps.sensorDefaultCrop;
+            }
+
             if (auto array = props.get(libcamera::properties::PixelArraySize))
                 info.pixelArray = toSize(*array);
             if (auto areas = props.get(libcamera::properties::PixelArrayActiveAreas)) {
