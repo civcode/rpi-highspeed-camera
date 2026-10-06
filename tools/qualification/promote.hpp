@@ -153,10 +153,26 @@ inline PromotionResult promoteQualificationRun(
             campaignDocument.find("visual_samples");
         visual && visual->isObject()) {
         if (const auto *enabled = visual->find("enabled");
-            enabled && enabled->asBool() &&
-            !fs::exists(run / "samples.json"))
-            throw std::runtime_error(
-                "visual_samples are enabled but samples.json is missing");
+            enabled && enabled->asBool()) {
+            if (!fs::exists(run / "samples.json"))
+                throw std::runtime_error(
+                    "visual_samples are enabled but samples.json is missing");
+
+            const auto samplesDocument =
+                internal::json::parse(
+                    promotionReadText(run / "samples.json"));
+            requireSchemaVersion1(
+                samplesDocument, "visual samples");
+
+            for (const auto &sample :
+                 samplesDocument.at("samples").asArray()) {
+                if (const auto *error = sample.find("error");
+                    error && !error->isNull())
+                    throw std::runtime_error(
+                        "refusing to promote a run with visual-sample "
+                        "errors: " + error->asString());
+            }
+        }
     }
 
     const std::string planId = plan.at("plan_id").asString();
