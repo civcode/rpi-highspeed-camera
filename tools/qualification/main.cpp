@@ -14,6 +14,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -197,7 +198,10 @@ std::optional<hscam::Rect> parseRect(const Value &value)
     const auto w = a[2].asUInt64();
     const auto h = a[3].asUInt64();
     if (x < 0 || y < 0 || w == 0 || h == 0 ||
-        x > INT32_MAX || y > INT32_MAX || w > UINT32_MAX || h > UINT32_MAX)
+        x > static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::max()) ||
+        y > static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::max()) ||
+        w > std::numeric_limits<std::uint32_t>::max() ||
+        h > std::numeric_limits<std::uint32_t>::max())
         throw std::runtime_error("crop is out of range");
     return hscam::Rect{static_cast<std::int32_t>(x), static_cast<std::int32_t>(y),
                        static_cast<std::uint32_t>(w), static_cast<std::uint32_t>(h)};
@@ -608,6 +612,8 @@ int runIsolated(const fs::path &executable, const fs::path &casePath,
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 }
+
+Value timeoutResult(const TestCase &test);
 
 bool probeStable(const Value &result, std::int64_t requestedUs,
                  double achievedRatio, std::uint64_t toleranceUs)
