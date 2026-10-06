@@ -70,6 +70,8 @@ Do not put these into the first implementation:
 
 Those features become much easier to evaluate after the capture path is stable.
 
+One exception is **visual verification**: once raw capture works, the project must immediately add a separate offline export path that can reconstruct captured raw buffers into images and slow-motion video. This remains outside the timing-critical capture core. See [Raw visualization and export concept](raw-visualization-and-export.md).
+
 ---
 
 # 2. Fundamental design rules
@@ -1138,9 +1140,13 @@ The first code work should proceed in this order:
 13. TRY/ACTIVE sensor crop.
 14. exact post-libcamera crop verification.
 15. IMX296 1456x96 high-FPS regression.
-16. only then begin the official-camera qualification harness.
+16. add the self-describing HSCAP capture bundle;
+17. add raw unpacking and deterministic PNG preview export;
+18. add DNG export;
+19. add slow-motion video export;
+20. only then begin the official-camera qualification harness.
 
-That sequence gives us useful, testable software at every checkpoint and avoids designing the exhaustive qualification machinery on top of an unstable capture core.
+That sequence gives us useful, testable software at every checkpoint and ensures the qualification campaign is both timing-verifiable and visually auditable, without placing debayering or encoding in the high-FPS capture path.
 
 ---
 
@@ -1162,3 +1168,4 @@ Project design documents:
 
 - [High-FPS capture method](high-fps-capture-method.md)
 - [Camera support and automated crop testing](camera-support-and-crop-testing.md)
+- [Raw visualization and export concept](raw-visualization-and-export.md)
