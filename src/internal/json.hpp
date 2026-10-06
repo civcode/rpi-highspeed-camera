@@ -1,9 +1,11 @@
 #pragma once
 
 #include <cctype>
+#include <charconv>
 #include <cmath>
 #include <cstdint>
 #include <iomanip>
+#include <limits>
 #include <map>
 #include <sstream>
 #include <stdexcept>
@@ -18,15 +20,17 @@ class Value {
 public:
     using Array = std::vector<Value>;
     using Object = std::map<std::string, Value>;
-    using Storage = std::variant<std::nullptr_t, bool, double, std::string, Array, Object>;
+    using Storage = std::variant<std::nullptr_t, bool, std::int64_t, std::uint64_t, double,
+                                 std::string, Array, Object>;
 
     Value() : value_(nullptr) {}
     Value(std::nullptr_t) : value_(nullptr) {}
     Value(bool v) : value_(v) {}
     Value(double v) : value_(v) {}
-    Value(std::int64_t v) : value_(static_cast<double>(v)) {}
-    Value(std::uint64_t v) : value_(static_cast<double>(v)) {}
-    Value(int v) : value_(static_cast<double>(v)) {}
+    Value(std::int64_t v) : value_(v) {}
+    Value(std::uint64_t v) : value_(v) {}
+    Value(int v) : value_(static_cast<std::int64_t>(v)) {}
+    Value(unsigned v) : value_(static_cast<std::uint64_t>(v)) {}
     Value(std::string v) : value_(std::move(v)) {}
     Value(const char *v) : value_(std::string(v)) {}
     Value(Array v) : value_(std::move(v)) {}
@@ -34,15 +38,59 @@ public:
 
     [[nodiscard]] bool isNull() const { return std::holds_alternative<std::nullptr_t>(value_); }
     [[nodiscard]] bool isBool() const { return std::holds_alternative<bool>(value_); }
-    [[nodiscard]] bool isNumber() const { return std::holds_alternative<double>(value_); }
+    [[nodiscard]] bool isNumber() const {
+        return std::holds_alternative<std::int64_t>(value_) ||
+               std::holds_alternative<std::uint64_t>(value_) ||
+               std::holds_alternative<double>(value_);
+    }
     [[nodiscard]] bool isString() const { return std::holds_alternative<std::string>(value_); }
     [[nodiscard]] bool isArray() const { return std::holds_alternative<Array>(value_); }
     [[nodiscard]] bool isObject() const { return std::holds_alternative<Object>(value_); }
 
     [[nodiscard]] bool asBool() const { return std::get<bool>(value_); }
-    [[nodiscard]] double asNumber() const { return std::get<double>(value_); }
-    [[nodiscard]] std::int64_t asInt64() const { return static_cast<std::int64_t>(std::llround(asNumber())); }
-    [[nodiscard]] std::uint64_t asUInt64() const { return static_cast<std::uint64_t>(std::llround(asNumber())); }
+
+    [[nodiscard]] double asNumber() const
+    {
+        if (auto p = std::get_if<double>(&value_)) return *p;
+        if (auto p = std::get_if<std::int64_t>(&value_)) return static_cast<double>(*p);
+        if (auto p = std::get_if<std::uint64_t>(&value_)) return static_cast<double>(*p);
+        throw std::bad_variant_access();
+    }
+
+    [[nodiscard]] std::int64_t asInt64() const
+    {
+        if (auto p = std::get_if<std::int64_t>(&value_)) return *p;
+        if (auto p = std::get_if<std::uint64_t>(&value_)) {
+            if (*p > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
+                throw std::out_of_range("JSON unsigned integer does not fit int64");
+            return static_cast<std::int64_t>(*p);
+        }
+        if (auto p = std::get_if<double>(&value_)) {
+            if (!std::isfinite(*p) || std::trunc(*p) != *p ||
+                *p < static_cast<double>(std::numeric_limits<std::int64_t>::min()) ||
+                *p > static_cast<double>(std::numeric_limits<std::int64_t>::max()))
+                throw std::out_of_range("JSON number does not fit int64 exactly");
+            return static_cast<std::int64_t>(*p);
+        }
+        throw std::bad_variant_access();
+    }
+
+    [[nodiscard]] std::uint64_t asUInt64() const
+    {
+        if (auto p = std::get_if<std::uint64_t>(&value_)) return *p;
+        if (auto p = std::get_if<std::int64_t>(&value_)) {
+            if (*p < 0) throw std::out_of_range("negative JSON integer does not fit uint64");
+            return static_cast<std::uint64_t>(*p);
+        }
+        if (auto p = std::get_if<double>(&value_)) {
+            if (!std::isfinite(*p) || std::trunc(*p) != *p || *p < 0.0 ||
+                *p > static_cast<double>(std::numeric_limits<std::uint64_t>::max()))
+                throw std::out_of_range("JSON number does not fit uint64 exactly");
+            return static_cast<std::uint64_t>(*p);
+        }
+        throw std::bad_variant_access();
+    }
+
     [[nodiscard]] const std::string &asString() const { return std::get<std::string>(value_); }
     [[nodiscard]] const Array &asArray() const { return std::get<Array>(value_); }
     [[nodiscard]] const Object &asObject() const { return std::get<Object>(value_); }
@@ -66,6 +114,8 @@ public:
         return it == obj.end() ? nullptr : &it->second;
     }
 
+    [[nodiscard]] const Storage &storage() const noexcept { return value_; }
+
 private:
     Storage value_;
 };
@@ -84,7 +134,8 @@ inline std::string escape(std::string_view input)
         case '\t': out << "\\t"; break;
         default:
             if (ch < 0x20)
-                out << "\\u" << std::hex << std::setw(4) << std::setfill('0') << static_cast<unsigned>(ch) << std::dec;
+                out << "\\u" << std::hex << std::setw(4) << std::setfill('0')
+                    << static_cast<unsigned>(ch) << std::dec;
             else
                 out << static_cast<char>(ch);
         }
@@ -100,13 +151,10 @@ inline void stringifyInto(const Value &value, std::ostream &out, int indent, int
 
     if (value.isNull()) out << "null";
     else if (value.isBool()) out << (value.asBool() ? "true" : "false");
-    else if (value.isNumber()) {
-        const double n = value.asNumber();
-        if (std::floor(n) == n && std::abs(n) < 9007199254740992.0)
-            out << std::fixed << std::setprecision(0) << n << std::defaultfloat;
-        else
-            out << std::setprecision(17) << n;
-    } else if (value.isString()) out << '"' << escape(value.asString()) << '"';
+    else if (auto p = std::get_if<std::int64_t>(&value.storage())) out << *p;
+    else if (auto p = std::get_if<std::uint64_t>(&value.storage())) out << *p;
+    else if (auto p = std::get_if<double>(&value.storage())) out << std::setprecision(17) << *p;
+    else if (value.isString()) out << '"' << escape(value.asString()) << '"';
     else if (value.isArray()) {
         const auto &array = value.asArray();
         out << '[';
@@ -186,7 +234,7 @@ private:
         if (ch == 't') return parseLiteral("true", Value(true));
         if (ch == 'f') return parseLiteral("false", Value(false));
         if (ch == 'n') return parseLiteral("null", Value(nullptr));
-        if (ch == '-' || std::isdigit(static_cast<unsigned char>(ch))) return Value(parseNumber());
+        if (ch == '-' || std::isdigit(static_cast<unsigned char>(ch))) return parseNumber();
         fail("unexpected token");
     }
 
@@ -222,22 +270,45 @@ private:
         fail("unterminated string");
     }
 
-    double parseNumber()
+    Value parseNumber()
     {
         const std::size_t begin = pos_;
+        bool floating = false;
         if (text_[pos_] == '-') ++pos_;
+        if (pos_ >= text_.size() || !std::isdigit(static_cast<unsigned char>(text_[pos_])))
+            fail("invalid number");
         while (pos_ < text_.size() && std::isdigit(static_cast<unsigned char>(text_[pos_]))) ++pos_;
         if (pos_ < text_.size() && text_[pos_] == '.') {
+            floating = true;
             ++pos_;
             while (pos_ < text_.size() && std::isdigit(static_cast<unsigned char>(text_[pos_]))) ++pos_;
         }
         if (pos_ < text_.size() && (text_[pos_] == 'e' || text_[pos_] == 'E')) {
+            floating = true;
             ++pos_;
             if (pos_ < text_.size() && (text_[pos_] == '+' || text_[pos_] == '-')) ++pos_;
             while (pos_ < text_.size() && std::isdigit(static_cast<unsigned char>(text_[pos_]))) ++pos_;
         }
-        try { return std::stod(std::string(text_.substr(begin, pos_ - begin))); }
-        catch (...) { fail("invalid number"); }
+
+        const auto token = text_.substr(begin, pos_ - begin);
+        if (floating) {
+            try { return Value(std::stod(std::string(token))); }
+            catch (...) { fail("invalid floating point number"); }
+        }
+
+        if (!token.empty() && token.front() == '-') {
+            std::int64_t value{};
+            const auto [ptr, ec] = std::from_chars(token.data(), token.data() + token.size(), value);
+            if (ec != std::errc{} || ptr != token.data() + token.size())
+                fail("signed integer out of range");
+            return Value(value);
+        }
+
+        std::uint64_t value{};
+        const auto [ptr, ec] = std::from_chars(token.data(), token.data() + token.size(), value);
+        if (ec != std::errc{} || ptr != token.data() + token.size())
+            fail("unsigned integer out of range");
+        return Value(value);
     }
 
     Value parseArray()
