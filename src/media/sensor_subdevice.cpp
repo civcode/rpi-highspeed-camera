@@ -101,19 +101,39 @@ SensorSubdevice &SensorSubdevice::operator=(SensorSubdevice &&other) noexcept
     return *this;
 }
 
-std::optional<SensorSubdevice> SensorSubdevice::discover(const std::string &sensorModel,
-                                                         const std::vector<std::int64_t> &systemDevices)
+std::optional<SensorSubdevice> SensorSubdevice::discover(
+    const std::string &sensorModel,
+    const std::vector<std::int64_t> &systemDevices)
 {
-    for (const auto &candidate : candidatesFromSystemDevices(sensorModel, systemDevices)) {
-        const int fd = ::open(candidate.node.c_str(), O_RDWR | O_CLOEXEC);
+    struct Probe {
+        SensorSubdeviceInfo info;
+        int score{};
+    };
+
+    std::optional<Probe> best;
+    bool ambiguousBest = false;
+
+    for (const auto &candidate :
+         candidatesFromSystemDevices(sensorModel, systemDevices)) {
+        const int fd =
+            ::open(candidate.node.c_str(), O_RDWR | O_CLOEXEC);
         if (fd < 0)
             continue;
 
         for (unsigned pad = 0; pad < 8; ++pad) {
-            auto current = getSelection(fd, pad, V4L2_SEL_TGT_CROP, V4L2_SUBDEV_FORMAT_ACTIVE);
-            auto bounds = getSelection(fd, pad, V4L2_SEL_TGT_CROP_BOUNDS, V4L2_SUBDEV_FORMAT_ACTIVE);
-            auto native = getSelection(fd, pad, V4L2_SEL_TGT_NATIVE_SIZE, V4L2_SUBDEV_FORMAT_ACTIVE);
-            auto def = getSelection(fd, pad, V4L2_SEL_TGT_CROP_DEFAULT, V4L2_SUBDEV_FORMAT_ACTIVE);
+            auto current = getSelection(
+                fd, pad, V4L2_SEL_TGT_CROP,
+                V4L2_SUBDEV_FORMAT_ACTIVE);
+            auto bounds = getSelection(
+                fd, pad, V4L2_SEL_TGT_CROP_BOUNDS,
+                V4L2_SUBDEV_FORMAT_ACTIVE);
+            auto native = getSelection(
+                fd, pad, V4L2_SEL_TGT_NATIVE_SIZE,
+                V4L2_SUBDEV_FORMAT_ACTIVE);
+            auto def = getSelection(
+                fd, pad, V4L2_SEL_TGT_CROP_DEFAULT,
+                V4L2_SUBDEV_FORMAT_ACTIVE);
+
             if (!current && !bounds && !native)
                 continue;
 
@@ -122,7 +142,8 @@ std::optional<SensorSubdevice> SensorSubdevice::discover(const std::string &sens
             info.name = candidate.name;
             info.pad = pad;
             info.currentCrop = current;
-            info.capabilities.sensorCropQueryable = current.has_value();
+            info.capabilities.sensorCropQueryable =
+                current.has_value();
             info.capabilities.sensorCropBounds = bounds;
             info.capabilities.sensorNativeSize = native;
             info.capabilities.sensorDefaultCrop = def;
@@ -133,21 +154,65 @@ std::optional<SensorSubdevice> SensorSubdevice::discover(const std::string &sens
                 sel.pad = pad;
                 sel.target = V4L2_SEL_TGT_CROP;
                 sel.r = toV4l2(*current);
-                info.capabilities.sensorCropTryable = ::ioctl(fd, VIDIOC_SUBDEV_S_SELECTION, &sel) == 0;
+                info.capabilities.sensorCropTryable =
+                    ::ioctl(
+                        fd, VIDIOC_SUBDEV_S_SELECTION,
+                        &sel) == 0;
 
                 sel = {};
                 sel.which = V4L2_SUBDEV_FORMAT_ACTIVE;
                 sel.pad = pad;
                 sel.target = V4L2_SEL_TGT_CROP;
                 sel.r = toV4l2(*current);
-                info.capabilities.sensorCropSettable = ::ioctl(fd, VIDIOC_SUBDEV_S_SELECTION, &sel) == 0;
-                info.capabilities.sensorCropExact = info.capabilities.sensorCropSettable && fromV4l2(sel.r) == *current;
+                info.capabilities.sensorCropSettable =
+                    ::ioctl(
+                        fd, VIDIOC_SUBDEV_S_SELECTION,
+                        &sel) == 0;
+                info.capabilities.sensorCropExact =
+                    info.capabilities.sensorCropSettable &&
+                    fromV4l2(sel.r) == *current;
             }
-            return SensorSubdevice(fd, std::move(info));
+
+            // A model/name match is the strongest signal. Native
+            // geometry and mutable crop support make a subdevice more
+            // sensor-like, but are deliberately weaker signals.
+            int score = candidate.score;
+            if (native)
+                score += 16;
+            if (bounds)
+                score += 8;
+            if (current)
+                score += 4;
+            if (info.capabilities.sensorCropTryable)
+                score += 2;
+            if (info.capabilities.sensorCropSettable)
+                score += 1;
+
+            if (!best || score > best->score) {
+                best = Probe{std::move(info), score};
+                ambiguousBest = false;
+            } else if (score == best->score &&
+                       (info.deviceNode != best->info.deviceNode ||
+                        info.pad != best->info.pad)) {
+                ambiguousBest = true;
+            }
         }
+
         ::close(fd);
     }
-    return std::nullopt;
+
+    // A wrong crop target is worse than no crop support. If two
+    // subdevices are equally plausible, leave sensor cropping
+    // disabled and continue to support normal libcamera capture.
+    if (!best || ambiguousBest)
+        return std::nullopt;
+
+    const int fd =
+        ::open(best->info.deviceNode.c_str(), O_RDWR | O_CLOEXEC);
+    if (fd < 0)
+        return std::nullopt;
+
+    return SensorSubdevice(fd, std::move(best->info));
 }
 
 std::optional<Rect> SensorSubdevice::currentCrop() const
