@@ -581,6 +581,10 @@ public:
         result.timing.exposure = request.timing.exposure;
         result.timing.analogueGain = request.timing.analogueGain;
 
+        const bool sizeAdjusted = requestedSize != config->at(0).size;
+        const bool formatAdjusted = requestedFormat != config->at(0).pixelFormat;
+        const bool buffersAdjusted = requestedBuffers != config->at(0).bufferCount;
+
         addAdjustment(result.adjustments, "stream.size", sizeString(requestedSize),
                       sizeString(config->at(0).size), AdjustmentSource::Libcamera);
         addAdjustment(result.adjustments, "stream.format", requestedFormat.toString(),
@@ -588,8 +592,18 @@ public:
         addAdjustment(result.adjustments, "stream.bufferCount", std::to_string(requestedBuffers),
                       std::to_string(config->at(0).bufferCount), AdjustmentSource::Libcamera);
 
-        if (request.negotiation == NegotiationPolicy::Exact && !result.adjustments.empty())
-            throw ExactConfigurationFailed("capture negotiation adjusted an exact request");
+        if (request.negotiation == NegotiationPolicy::Exact) {
+            const bool sizeWasRequested = request.stream.size.has_value() ||
+                                          request.sensor.modeId.has_value() ||
+                                          request.sensor.crop.has_value();
+            const bool formatWasRequested = request.stream.format.has_value() ||
+                                            request.sensor.modeId.has_value();
+            const bool buffersWereRequested = request.stream.bufferCount != 0;
+            if ((sizeWasRequested && sizeAdjusted) ||
+                (formatWasRequested && formatAdjusted) ||
+                (buffersWereRequested && buffersAdjusted))
+                throw ExactConfigurationFailed("libcamera adjusted an explicitly requested field");
+        }
 
         const int rc = camera_->configure(config.get());
         if (rc < 0)
