@@ -149,6 +149,16 @@ build/hscam-export video cropped.hscap \
   --playback-fps 30
 ```
 
+Or export at the average real-time rate derived from captured sensor timestamps:
+
+```bash
+build/hscam-export video cropped.hscap \
+  --output realtime.mp4 \
+  --timing sensor
+```
+
+`hscam-export inspect` also reports timestamp-derived FPS when the capture contains enough sensor timestamps. The sensor-timing mode preserves the measured average elapsed rate in a constant-frame-rate video; the HSCAP per-frame timestamps remain authoritative for jitter/drop analysis.
+
 Rendering is deliberately offline by default. Image processing and encoding therefore cannot make a high-FPS timing test pass or fail.
 
 ## Official-camera qualification campaign
@@ -212,11 +222,20 @@ qualification/work/<camera>/
         fastest-slow-motion.mp4
 ```
 
-Only runs with `campaign_status.json` reporting `"valid": true` should be promoted into the checked-in results dataset. Promotion rules live in [qualification/results/README.md](qualification/results/README.md).
+Only valid, clean-revision runs are eligible for the checked-in results dataset. Promote them with:
+
+```bash
+build/hscam-qualify promote \
+  qualification/work/imx296 \
+  --results-root qualification/results
+```
+
+The promotion command enforces the publication gate and omits large raw `.hscap` sample bundles while retaining result provenance and derived visual evidence. Full promotion rules live in [qualification/results/README.md](qualification/results/README.md).
 
 ## Design documents
 
 - [v0.1 implementation roadmap](docs/v0.1-implementation-roadmap.md)
+- [v0.1 release status](docs/v0.1-release-status.md)
 - [HSCAP v1 format](docs/hscap-v1-format.md)
 - [qualification results v1](docs/qualification-results-v1.md)
 - [C++ library first implementation](docs/cpp-library-first-implementation.md)
@@ -237,4 +256,4 @@ The implementation follows a few deliberate constraints:
 - no `media-ctl`, `rpicam-vid`, or FFmpeg subprocess is used by the core capture library;
 - qualification hardware execution is local and explicit, not GitHub Actions.
 
-The repository is pre-1.0 and the public API/HSCAP schema may still change while hardware validation proceeds.
+The repository is pre-1.0 and the public API/HSCAP schema may still change while hardware validation proceeds. The implementation remains `0.1.0-dev`; the physical six-camera campaign and a project-owner license decision are still required before the final v0.1 release. See [v0.1 release status](docs/v0.1-release-status.md).
