@@ -1,44 +1,50 @@
-# High-FPS capture method for the Raspberry Pi Global Shutter Camera
+# High-FPS capture method for Raspberry Pi cameras
 
 ## Status
 
-This document specifies the capture method this repository intends to reproduce in a clean, maintainable implementation.
+This document specifies the high-frame-rate capture methods this repository intends to reproduce in a clean, maintainable implementation across Raspberry Pi camera sensors.
 
-It is based on published Raspberry Pi forum experiments, Hermann Stamm-Wilbrandt's `GScrop` work, later Raspberry Pi 5 tests, and related high-frame-rate Raspberry Pi camera projects. The method has **not yet been independently validated by this repository**. The first implementation milestone should reproduce the published results before adding new processing or storage features.
+The IMX296 Global Shutter Camera is the best-documented reference case because published GScrop work demonstrates arbitrary sensor-level cropping at more than 500 fps. It is **not** the project boundary. The implementation must discover each attached camera's capabilities at runtime and support fixed sensor modes, mutable sensor crops, raw capture, and processed capture as the underlying driver permits.
+
+The methods described here have **not yet been independently validated by this repository**. Published results are reference targets until reproduced by the project's automated hardware test harness.
+
+See [Camera support and automated crop testing](camera-support-and-crop-testing.md) for the generic capability model, crop enumeration strategy, stability criteria, and result format.
 
 ## Goal
 
-Use the Raspberry Pi Global Shutter Camera (Sony IMX296) at frame rates far above its normal full-frame rate by reducing the **sensor readout window**, while keeping the capture path compatible with the modern libcamera/rpicam stack.
+Build a sensor-agnostic C++ capture library/application, with optional Python bindings, that characterizes and uses the fastest stable capture configurations exposed by the modern libcamera, media-controller, and V4L2 stack.
 
-The target implementation should eventually provide the same capability from a small C++ library/application, with optional Python bindings, instead of depending on shell scripts and a chain of command-line programs.
+For cameras that support a mutable **sensor readout window**, reduce sensor readout to increase frame rate. For cameras that only expose predefined sensor modes, enumerate and benchmark those modes rather than pretending that an ISP/scaler crop is equivalent to a sensor crop.
+
+The implementation should replace shell-script orchestration with direct APIs while retaining the ability to reproduce known high-FPS experiments.
 
 The important distinction is:
 
 - **sensor crop / readout crop**: fewer sensor rows are read, reducing frame time and increasing the possible frame rate;
 - **ISP/scaler crop**: the sensor still reads the original frame and pixels are discarded later, so this does not create the same frame-rate increase.
 
-The high-FPS method depends on the first kind.
+High-FPS operation may depend on the first kind, on a predefined high-speed sensor mode, or on both. The application must report which mechanism is in use.
 
 ---
 
 ## Hardware and software assumptions
 
-Primary target:
+Primary development target:
 
-- Raspberry Pi 5
-- Raspberry Pi Global Shutter Camera
-- Sony IMX296
-- current Raspberry Pi OS camera stack
-- libcamera / rpicam-apps
-- Linux media-controller and V4L2 subdevice APIs
+- Raspberry Pi 5;
+- current Raspberry Pi OS camera stack;
+- libcamera / rpicam-apps;
+- Linux media-controller and V4L2 subdevice APIs.
 
-Pi 4 is also relevant because the original demonstrations were performed there, but Pi 5 is the preferred development target because later tests showed more processing and larger cropped frames at the same high frame rates.
+The architecture must also support other Raspberry Pi boards where libcamera exposes the camera successfully.
 
-The official camera is a 1456x1088, 1.6 MP global-shutter camera. Raspberry Pi specifies exposure times as low as 30 us when there is enough light.
+Official Raspberry Pi camera families currently include OV5647 (Camera Module v1), IMX219 (v2), IMX708 (Camera Module 3), IMX477 (HQ), IMX296 (Global Shutter), and IMX500 (AI Camera). The generic path should also attempt to support third-party sensors exposed through the same libcamera/media/V4L2 interfaces.
 
-## Core mechanism
+No model name is a promise of arbitrary cropping. For example, a camera may expose only fixed sensor modes. Runtime capability discovery is authoritative.
 
-The core observation is that the IMX296 frame rate rises dramatically when the active sensor readout height is reduced.
+## Reference mechanism: IMX296 sensor crop
+
+The best documented arbitrary-crop reference is IMX296. Its frame rate rises dramatically when the active sensor readout height is reduced.
 
 The original `GScrop` tool changes the active format/crop on the IMX296 V4L2 sensor subdevice through the Linux media-controller interface. In simplified form, it performs an operation equivalent to:
 
@@ -187,14 +193,20 @@ C++ should own the high-rate data path.
 Suggested components:
 
 ```text
-MediaGraph
-  discover IMX296 media device/entity/pad
+CameraInventory
+  enumerate libcamera cameras
+  read pixel array, active areas, modes and formats
+  associate cameras with media devices/subdevices
 
-Imx296Sensor
-  query crop bounds
-  set sensor format
-  set crop rectangle
-  validate resulting format
+MediaGraph
+  discover sensor entity/pad without hard-coded device numbers
+
+SensorControl
+  query selection targets and crop bounds
+  try/set crop where the driver permits it
+  enumerate/validate fixed modes
+  restore prior state
+  expose optional sensor-specific quirks
 
 Camera
   configure libcamera streams
@@ -214,6 +226,13 @@ CaptureStats
   sequence gaps
   queue overruns
   processing latency
+
+CropTestRunner
+  test one requested crop or advertised mode
+  sweep candidate crops
+  search maximum stable FPS
+  isolate failures in worker processes
+  generate JSON/CSV/Markdown reports
 ```
 
 ### Layer 2: optional Python API
@@ -244,12 +263,14 @@ The Linux media-controller API should be used to:
 
 1. enumerate `/dev/media*`;
 2. enumerate media entities and pads;
-3. find the IMX296 sensor subdevice;
+3. identify the sensor subdevice associated with the selected libcamera camera;
 4. open the associated `/dev/v4l-subdev*`;
-5. query supported selection/crop bounds;
-6. set the active subdevice format;
-7. set the active crop/selection rectangle;
-8. read the values back and verify them.
+5. query which selection targets are actually supported;
+6. query native size, crop bounds, current crop, formats and advertised modes;
+7. use TRY-state negotiation where available to probe candidate rectangles safely;
+8. set the active subdevice format/crop only when the driver supports it;
+9. read negotiated values back and verify them;
+10. fall back to advertised-mode benchmarking when arbitrary sensor crop is unavailable.
 
 At the subdevice level this is expected to involve the normal V4L2 subdevice operations such as:
 
@@ -365,31 +386,44 @@ RAM should be treated as a ring buffer that absorbs latency and allows pre/post-
 
 ## Validation plan
 
-The first implementation milestone is successful only when it reproduces high frame rates **without hidden frame loss**.
+The implementation is successful only when it can characterize a camera automatically and reproduce high frame rates **without hidden frame loss**.
 
-### Minimum test matrix
+### Per-camera automated test matrix
 
-Run at least:
+For every attached camera, the test harness should:
 
-1. 128x96 @ 536 fps
-2. 224x96 @ 536 fps
-3. 688x136 @ 400 fps
-4. 1456x96 @ 536 fps
+1. record the camera/system environment;
+2. enumerate every libcamera-advertised sensor mode and format;
+3. inspect sensor/subdevice crop capabilities;
+4. benchmark every advertised mode;
+5. if mutable sensor crop is supported, probe one arbitrary crop supplied by the user and support automated crop sweeps;
+6. determine negotiated versus requested crop geometry;
+7. search for maximum stable FPS for each selected mode/crop;
+8. produce canonical JSON plus CSV and Markdown reports.
 
-For each mode:
+The tester must support centered sweeps, all-size sweeps, position sweeps, and an explicit exhaustive mode. Because the V4L2 selection API exposes bounds rather than a universal list of every valid rectangle, valid crop geometry must be discovered by negotiation/probing.
 
-- capture at least 10 seconds;
+For IMX296 regression testing, retain these published reference targets:
+
+1. 128x96 @ approximately 536 fps;
+2. 224x96 @ approximately 536 fps;
+3. 688x136 @ approximately 400 fps;
+4. 1456x96 @ approximately 536 fps.
+
+For each actual capture test:
+
+- capture for a configurable duration;
 - record every frame timestamp;
 - count frame intervals near 1x, 2x, 3x expected duration;
 - report dropped-frame percentage;
-- report average and minimum/maximum interval;
+- report average, percentile, minimum and maximum interval;
 - report CPU load;
 - report buffer queue overruns;
 - report output bytes/second;
-- repeat with no processing;
-- repeat with the intended processing stage enabled.
-
-A longer 60-second 688x136 @ 400 fps run is useful for comparison with the published Pi 5 result.
+- record requested and negotiated crop/mode;
+- classify the crop as sensor, fixed sensor mode, or scaler/ISP;
+- record timeout/recovery behavior;
+- record thermal/throttling state.
 
 ### Environment data to record
 
@@ -451,12 +485,18 @@ This reinforces the general sensor-timing principle, but those modes require sen
 
 ### In scope
 
-- Raspberry Pi Global Shutter Camera / IMX296;
-- clean sensor-crop discovery and configuration;
+- every camera exposed successfully through Raspberry Pi's libcamera stack;
+- official OV5647, IMX219, IMX708, IMX477, IMX296, and IMX500 families;
+- upstream-supported third-party sensors where the standard media/V4L2 interfaces are usable;
+- generic camera/mode/crop capability discovery;
+- fixed sensor-mode benchmarking;
+- arbitrary sensor-crop probing where supported by the driver;
+- automated crop sweeps and maximum-stable-FPS measurement;
+- machine-readable JSON results plus CSV/Markdown reports;
 - libcamera C++ capture;
 - high-rate request/buffer handling;
 - timestamp and frame-skip validation;
-- raw Bayer and/or YUV420 capture;
+- raw Bayer and/or processed capture;
 - RAM ring buffering;
 - pluggable processing stages;
 - storage throughput measurement;
@@ -464,11 +504,11 @@ This reinforces the general sensor-timing principle, but those modes require sen
 
 ### Out of scope for the first milestone
 
-- kernel patches for unrelated sensors;
+- claiming arbitrary sensor ROI on hardware/drivers that do not expose it;
+- silently substituting ISP `ScalerCrop` for a sensor readout crop;
+- automatic kernel patching or sensor register hacking;
 - reviving the legacy camera stack;
 - `raspiraw` compatibility;
-- arbitrary IMX296 register hacking;
-- assuming 1,000 fps is possible on IMX296;
 - synchronous debayer/encoding inside the capture callback;
 - Movidius/OpenVINO integration.
 
@@ -478,18 +518,28 @@ Those can be evaluated only after the base capture path is repeatable.
 
 ## Recommended implementation order
 
-1. Add a diagnostic tool that enumerates media devices, entities, pads and the IMX296 subdevice.
-2. Reproduce GScrop using `media-ctl` plus a minimal native capture/validation program.
-3. Replace `media-ctl` with direct media-controller/V4L2 subdevice ioctls.
-4. Reproduce 128x96 @ 536 fps and validate frame timestamps.
-5. Reproduce 1456x96 @ 536 fps.
-6. Add a bounded RAM ring buffer.
-7. Benchmark direct SSD/NVMe writing.
-8. Add YUV420/ISP output and measure stride/padding.
-9. Add lightweight processing plugins.
-10. Add optional Python bindings after the C++ capture path is stable.
+1. Add a generic camera inventory tool using libcamera.
+2. Associate each camera with its media graph and sensor subdevice.
+3. Enumerate advertised modes, formats, pixel-array metadata, and crop/selection capabilities.
+4. Add an automated benchmark runner for all advertised modes.
+5. Add a single arbitrary-crop probe using TRY-state negotiation where available.
+6. Replace shell-based crop setup with direct media-controller/V4L2 subdevice ioctls.
+7. Add centered/all-size crop sweeps and maximum-stable-FPS search.
+8. Emit versioned JSON, CSV, and Markdown test results.
+9. Isolate each experimental crop test in a worker process with timeout/recovery.
+10. Use IMX296 to reproduce 128x96 and 1456x96 at approximately 536 fps as regression targets.
+11. Add a bounded RAM ring buffer.
+12. Benchmark direct SSD/NVMe writing.
+13. Add processed/YUV output and measure stride/padding.
+14. Add lightweight processing plugins.
+15. Add optional Python bindings after the C++ capture/test path is stable.
 
-The key project rule should be: **every optimization is measured by achieved sensor-frame timestamps and dropped frames, not just requested FPS or encoder output FPS.**
+The key project rules should be:
+
+- **capabilities are discovered, not assumed from the sensor name;**
+- **every crop result records requested and negotiated geometry;**
+- **sensor crop, fixed sensor mode crop, and ISP/scaler crop are never conflated;**
+- **every optimization is measured by achieved sensor-frame timestamps and dropped frames, not just requested FPS or encoder output FPS.**
 
 ---
 
@@ -522,3 +572,19 @@ Related implementations and historical work:
   https://forums.raspberrypi.com/viewtopic.php?t=346359
 - Raspberry Pi Picamera2:  
   https://github.com/raspberrypi/picamera2
+
+
+## Generic camera-support references
+
+- Raspberry Pi camera software / currently supported sensors:  
+  https://www.raspberrypi.com/documentation/computers/camera_software.html
+- Raspberry Pi AI Camera / IMX500:  
+  https://www.raspberrypi.com/documentation/accessories/ai-camera.html
+- Linux V4L2 subdevice selection API:  
+  https://docs.kernel.org/userspace-api/media/v4l/vidioc-subdev-g-selection.html
+- Linux V4L2 selection targets:  
+  https://www.kernel.org/doc/html/latest/userspace-api/media/v4l/v4l2-selection-targets.html
+- libcamera camera properties:  
+  https://docs.libcamera.org/master/public-api/property__ids_8h.html
+- Project crop-testing specification:  
+  camera-support-and-crop-testing.md
