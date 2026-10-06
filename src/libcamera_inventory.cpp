@@ -619,6 +619,11 @@ public:
         return {result.requested, result.negotiated, result.exact};
     }
 
+    std::optional<Rect> currentSensorCrop() const override
+    {
+        return sensor_ ? sensor_->currentCrop() : std::nullopt;
+    }
+
     CaptureConfiguration configure(const CaptureRequest &request) override
     {
         if (configured_)

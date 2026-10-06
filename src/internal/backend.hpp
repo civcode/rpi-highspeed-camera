@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -31,6 +32,7 @@ public:
     virtual const std::string &id() const = 0;
     virtual CaptureConfiguration configure(const CaptureRequest &request) = 0;
     virtual CropNegotiation trySensorCrop(Rect requested) const = 0;
+    virtual std::optional<Rect> currentSensorCrop() const = 0;
     virtual const CaptureConfiguration &configuration() const = 0;
     virtual CaptureSession start() = 0;
 };

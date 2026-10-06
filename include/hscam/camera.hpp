@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "hscam/capture_configuration.hpp"
@@ -45,6 +46,7 @@ public:
     [[nodiscard]] const std::string &id() const;
     [[nodiscard]] CaptureConfiguration configure(const CaptureRequest &request);
     [[nodiscard]] CropNegotiation trySensorCrop(Rect requested) const;
+    [[nodiscard]] std::optional<Rect> currentSensorCrop() const;
     [[nodiscard]] const CaptureConfiguration &configuration() const;
     [[nodiscard]] CaptureSession start();
     [[nodiscard]] explicit operator bool() const noexcept;

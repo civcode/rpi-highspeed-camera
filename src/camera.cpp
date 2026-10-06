@@ -55,6 +55,10 @@ CropNegotiation Camera::trySensorCrop(Rect requested) const {
     if (!impl_) throw CameraNotFound("empty Camera");
     return impl_->trySensorCrop(requested);
 }
+std::optional<Rect> Camera::currentSensorCrop() const {
+    if (!impl_) throw CameraNotFound("empty Camera");
+    return impl_->currentSensorCrop();
+}
 const CaptureConfiguration &Camera::configuration() const {
     if (!impl_) throw CameraNotFound("empty Camera");
     return impl_->configuration();
