@@ -48,6 +48,60 @@ inline std::string pathComponent(std::string_view input)
     return out.empty() ? "unknown" : out;
 }
 
+inline bool insideRawBundle(const std::filesystem::path &relative);
+
+inline std::string qualificationPlanId(std::string_view campaignText,
+                                       std::string_view cameraId,
+                                       std::string_view hscamVersion,
+                                       std::string_view sourceRevision)
+{
+    std::string canonical;
+    canonical.reserve(campaignText.size() + cameraId.size() +
+                      hscamVersion.size() + sourceRevision.size() + 4);
+    canonical.append(campaignText);
+    canonical.push_back('\n');
+    canonical.append(cameraId);
+    canonical.push_back('\n');
+    canonical.append(hscamVersion);
+    canonical.push_back('\n');
+    canonical.append(sourceRevision);
+
+    std::uint64_t hash = 1469598103934665603ULL;
+    for (const unsigned char ch : canonical) {
+        hash ^= ch;
+        hash *= 1099511628211ULL;
+    }
+    std::ostringstream out;
+    out << std::hex << std::setfill('0') << std::setw(16) << hash;
+    return out.str();
+}
+
+inline void copyPromotionTree(const std::filesystem::path &source,
+                              const std::filesystem::path &destination,
+                              PromotionResult &result)
+{
+    namespace fs = std::filesystem;
+    if (!fs::exists(source))
+        return;
+
+    for (fs::recursive_directory_iterator it(source), end; it != end; ++it) {
+        const auto relative = fs::relative(it->path(), source);
+        if (it->is_directory() && it->path().extension() == ".hscap") {
+            result.omittedRawBundles.push_back(relative);
+            it.disable_recursion_pending();
+            continue;
+        }
+        if (!it->is_regular_file() || insideRawBundle(relative))
+            continue;
+
+        const auto target = destination / relative;
+        fs::create_directories(target.parent_path());
+        fs::copy_file(it->path(), target,
+                      fs::copy_options::overwrite_existing);
+        result.copiedFiles.push_back(target);
+    }
+}
+
 inline void requireSchemaVersion1(const internal::json::Value &value,
                                   std::string_view artifact)
 {
@@ -113,8 +167,10 @@ inline PromotionResult promoteQualificationRun(
         internal::json::parse(promotionReadText(run / "plan.json"));
     requireSchemaVersion1(plan, "qualification plan");
 
+    const std::string campaignText =
+        promotionReadText(run / "campaign.json");
     const auto campaignDocument =
-        internal::json::parse(promotionReadText(run / "campaign.json"));
+        internal::json::parse(campaignText);
     requireSchemaVersion1(campaignDocument, "campaign manifest");
 
     const auto camera =
@@ -148,6 +204,17 @@ inline PromotionResult promoteQualificationRun(
         throw std::runtime_error(
             "refusing to promote a run without a clean committed "
             "source revision");
+
+    const std::string hscamVersion = plan.at("hscam_version").asString();
+    const std::string expectedPlanId = qualificationPlanId(
+        campaignText, camera.at("id").asString(), hscamVersion,
+        sourceRevision);
+    if (plan.at("plan_id").asString() != expectedPlanId)
+        throw std::runtime_error(
+            "qualification plan_id does not match campaign/camera/version/source provenance");
+    if (results.at("plan_id").asString() != expectedPlanId)
+        throw std::runtime_error(
+            "results.json plan_id does not match qualification plan");
 
     if (const auto *visual =
             campaignDocument.find("visual_samples");
@@ -212,7 +279,9 @@ inline PromotionResult promoteQualificationRun(
         {"environment.json", true},
         {"environment_end.json", true},
         {"camera.json", true},
+        {"mode_sensor_crops.json", false},
         {"crop_geometry.json", false},
+        {"crop_geometry_probes.jsonl", false},
         {"campaign_status.json", true},
         {"results.json", true},
         {"results.csv", true},
@@ -227,32 +296,13 @@ inline PromotionResult promoteQualificationRun(
                 result.destination / artifact.name,
                 result, artifact.required);
 
-        const auto samples = run / "samples";
-        if (fs::exists(samples)) {
-            for (fs::recursive_directory_iterator it(samples), end;
-                 it != end; ++it) {
-                const auto relative =
-                    fs::relative(it->path(), samples);
-                if (it->is_directory() &&
-                    it->path().extension() == ".hscap") {
-                    result.omittedRawBundles.push_back(relative);
-                    it.disable_recursion_pending();
-                    continue;
-                }
-                if (!it->is_regular_file() ||
-                    insideRawBundle(relative))
-                    continue;
+        // Preserve all per-case and FPS-search evidence, including timing
+        // JSONL sidecars. These are the audit trail behind aggregate tables.
+        copyPromotionTree(run / "cases", result.destination / "cases", result);
+        copyPromotionTree(run / "search", result.destination / "search", result);
 
-                const auto destination =
-                    result.destination / "samples" / relative;
-                fs::create_directories(
-                    destination.parent_path());
-                fs::copy_file(
-                    it->path(), destination,
-                    fs::copy_options::overwrite_existing);
-                result.copiedFiles.push_back(destination);
-            }
-        }
+        const auto samples = run / "samples";
+        copyPromotionTree(samples, result.destination / "samples", result);
 
         Value::Array omitted;
         for (const auto &path : result.omittedRawBundles)
