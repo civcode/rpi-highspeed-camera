@@ -66,7 +66,8 @@ inline int runProgram(const std::filesystem::path &program,
     return WEXITSTATUS(status);
 }
 
-inline VisualSampleResult captureVisualSample(const VisualSampleSpec &spec,
+inline VisualSampleResult captureVisualSample(Context &context,
+                                              const VisualSampleSpec &spec,
                                               const std::filesystem::path &directory,
                                               const std::filesystem::path &exporter)
 {
@@ -80,7 +81,6 @@ inline VisualSampleResult captureVisualSample(const VisualSampleSpec &spec,
     if (fs::exists(result.bundle))
         fs::remove_all(result.bundle);
 
-    Context context;
     auto camera = context.open(spec.cameraId);
 
     CaptureRequest request;
