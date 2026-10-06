@@ -85,6 +85,39 @@ void rawFormatAndRenderCoverage()
     require(redPhase.pixels[0] == 255 && bluePhase.pixels[2] == 255,
             "Bayer phase must follow negotiated pixel format");
 
+    BundleManifest oddOrigin = rggb;
+    oddOrigin.configuration.sensor.crop = Rect{1, 0, 2, 2};
+    oddOrigin.configuration.stream.format = {"SGRBG8"};
+    const auto greenPhase = raw::renderPreview(oddOrigin, bayer);
+    require(greenPhase.pixels[1] == 255,
+            "odd crop origin phase must follow negotiated format");
+
+    // Exact bilinear fixture: every sample of each Bayer colour has a
+    // constant value, so interpolation must reproduce the same RGB triplet
+    // at every pixel.
+    BundleManifest fixture;
+    fixture.configuration.stream.size = {4, 4};
+    fixture.configuration.stream.format = {"SRGGB8"};
+    fixture.observedPlanes = {{4, 16}};
+    std::array<std::byte, 16> fixtureBytes{};
+    for (std::uint32_t y = 0; y < 4; ++y) {
+        for (std::uint32_t x = 0; x < 4; ++x) {
+            const bool xe = (x & 1U) == 0;
+            const bool ye = (y & 1U) == 0;
+            const unsigned value = ye && xe ? 255U :
+                                   (!ye && !xe ? 0U : 128U);
+            fixtureBytes[static_cast<std::size_t>(y) * 4 + x] =
+                static_cast<std::byte>(value);
+        }
+    }
+    const auto fixtureImage = raw::renderPreview(fixture, fixtureBytes);
+    for (std::size_t i = 0; i < fixtureImage.pixels.size(); i += 3) {
+        require(fixtureImage.pixels[i] == 255 &&
+                fixtureImage.pixels[i + 1] == 128 &&
+                fixtureImage.pixels[i + 2] == 0,
+                "bilinear demosaic fixture must be deterministic");
+    }
+
     BundleManifest mono;
     mono.configuration.stream.size = {2, 1};
     mono.configuration.stream.format = {"Y8"};
