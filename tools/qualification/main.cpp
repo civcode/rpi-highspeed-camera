@@ -1152,6 +1152,7 @@ void generateVisualSamples(const fs::path &output,
         spec.modeId = test.modeId;
         spec.crop = test.crop;
         spec.frameDurationUs = resultBestDurationUs(result);
+        spec.streamKind = test.streamKind;
         spec.frameCount = std::max<std::uint64_t>(1, frameCount);
         spec.exact = test.exact;
         spec.playbackFps = policy.visualPlaybackFps;
