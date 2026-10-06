@@ -1,0 +1,11 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+if(@HSCAM_CONFIG_REQUIRES_LIBCAMERA@)
+    find_dependency(PkgConfig)
+    pkg_check_modules(LIBCAMERA REQUIRED IMPORTED_TARGET libcamera)
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/hscamTargets.cmake")
+check_required_components(hscam)
