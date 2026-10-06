@@ -55,9 +55,10 @@ void createRun(const fs::path &run, std::string sourceRevision)
     write(run / "results.csv", "case_id,status\ncase0,pass\n");
     write(run / "report.md", "# Result\n");
     write(run / "samples.json",
-          R"({"schema_version":1,"samples":[]})");
+          R"({"schema_version":1,"samples":[{"label":"fastest","pngs":["samples/frame.png"],"dng":null,"video":"samples/video.mp4","warnings":[]}]})");
 
     write(run / "samples" / "frame.png", "png");
+    write(run / "samples" / "video.mp4", "video");
     write(run / "samples" / "raw.hscap" / "manifest.json",
           R"({"schema_version":1})");
     write(run / "cases" / "case0.json",
@@ -175,6 +176,30 @@ void rejectTamperedPlanId()
     fs::remove_all(base, ec);
 }
 
+void rejectMissingVisualVideo()
+{
+    const auto base =
+        fs::temp_directory_path() / "hscam-promotion-test-no-video";
+    const auto run = base / "run";
+
+    std::error_code ec;
+    fs::remove_all(base, ec);
+    createRun(run, "0123456789abcdef");
+    write(run / "samples.json",
+          R"({"schema_version":1,"samples":[{"label":"fastest","pngs":["samples/frame.png"],"dng":null,"video":null,"warnings":["video export failed"]}]})");
+
+    bool rejected = false;
+    try {
+        (void)hscam::qualification::promoteQualificationRun(
+            run, base / "results");
+    } catch (const std::exception &) {
+        rejected = true;
+    }
+
+    require(rejected, "missing visual video must block promotion");
+    fs::remove_all(base, ec);
+}
+
 void rejectRecoveryFailure()
 {
     const auto base =
@@ -208,6 +233,7 @@ int main()
         rejectDirtyRevision();
         rejectVisualSampleError();
         rejectTamperedPlanId();
+        rejectMissingVisualVideo();
         rejectRecoveryFailure();
         std::cout << "hscam promotion tests passed\n";
         return 0;
