@@ -257,6 +257,7 @@ struct SessionState : public std::enable_shared_from_this<SessionState> {
         }
 
         camera->requestCompleted.connect(this, &SessionState::requestComplete);
+        connected = true;
 
         libcamera::ControlList controls(camera->controls());
         if (config.timing.requestedFrameDuration) {
@@ -279,6 +280,7 @@ struct SessionState : public std::enable_shared_from_this<SessionState> {
         const int startRc = controls.empty() ? camera->start() : camera->start(&controls);
         if (startRc < 0)
             throw CaptureFailed("Camera::start failed: " + std::to_string(startRc));
+        started.store(true, std::memory_order_release);
         running.store(true, std::memory_order_release);
 
         for (auto &request : requests) {
@@ -342,8 +344,13 @@ struct SessionState : public std::enable_shared_from_this<SessionState> {
     std::unique_ptr<FrameLease::Impl> nextFrame(std::chrono::milliseconds timeout)
     {
         auto item = completed.popFor(timeout);
-        if (!item)
+        if (!item) {
+            if (running.load(std::memory_order_acquire)) {
+                std::lock_guard lock(statsMutex);
+                ++stats.consumerStarvations;
+            }
             throw Timeout("timed out waiting for camera frame");
+        }
         libcamera::Request *request = *item;
 
         FrameMetadata metadata;
@@ -398,12 +405,19 @@ struct SessionState : public std::enable_shared_from_this<SessionState> {
 
     void stop()
     {
-        bool expected = true;
-        if (!running.compare_exchange_strong(expected, false, std::memory_order_acq_rel))
+        if (stopped.exchange(true, std::memory_order_acq_rel))
             return;
-        (void)camera->stop();
+
+        running.store(false, std::memory_order_release);
+        if (started.exchange(false, std::memory_order_acq_rel))
+            (void)camera->stop();
+
         completed.close();
-        camera->requestCompleted.disconnect(this, &SessionState::requestComplete);
+
+        if (connected) {
+            camera->requestCompleted.disconnect(this, &SessionState::requestComplete);
+            connected = false;
+        }
     }
 
     CaptureStats snapshotStats() const
@@ -420,6 +434,9 @@ struct SessionState : public std::enable_shared_from_this<SessionState> {
     std::map<libcamera::FrameBuffer *, std::vector<MappedPlane>> mapped;
     internal::BoundedQueue<libcamera::Request *> completed;
     std::atomic_bool running{};
+    std::atomic_bool started{};
+    std::atomic_bool stopped{};
+    bool connected{};
     mutable std::mutex statsMutex;
     CaptureStats stats;
     std::optional<std::uint64_t> lastSequence;
