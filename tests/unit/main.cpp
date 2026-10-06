@@ -47,6 +47,66 @@ void rawPartialGroups()
     const std::array<std::byte,2> twelve{std::byte{0x12},std::byte{0x03}}; const auto decoded12=raw::decodeRaw(raw12,twelve); require(decoded12.pixels.size()==1&&decoded12.pixels[0]==0x123,"partial RAW12 group");
 }
 
+void rawFormatAndRenderCoverage()
+{
+    using namespace hscam;
+
+    require(raw::describePixelFormat("SRGGB10_CSI2P").bayer == raw::BayerOrder::RGGB,
+            "RGGB format mapping");
+    require(raw::describePixelFormat("SGRBG10_CSI2P").bayer == raw::BayerOrder::GRBG,
+            "GRBG format mapping");
+    require(raw::describePixelFormat("SGBRG10_CSI2P").bayer == raw::BayerOrder::GBRG,
+            "GBRG format mapping");
+    require(raw::describePixelFormat("SBGGR10_CSI2P").bayer == raw::BayerOrder::BGGR,
+            "BGGR format mapping");
+
+    // Padded rows must not leak padding bytes into decoded pixels.
+    BundleManifest padded;
+    padded.configuration.stream.size = {2, 2};
+    padded.configuration.stream.format = {"SRGGB8"};
+    padded.observedPlanes = {{4, 8}};
+    const std::array<std::byte, 8> bytes{
+        std::byte{1}, std::byte{2}, std::byte{0xee}, std::byte{0xee},
+        std::byte{3}, std::byte{4}, std::byte{0xdd}, std::byte{0xdd}};
+    const auto decoded = raw::decodeRaw(padded, bytes);
+    require(decoded.pixels == std::vector<std::uint16_t>({1, 2, 3, 4}),
+            "raw decoder must honor padded stride");
+
+    // A Bayer phase change must be represented by the negotiated pixel
+    // format. The same first sample is red in RGGB and blue in BGGR.
+    BundleManifest rggb = padded;
+    rggb.observedPlanes = {{2, 4}};
+    const std::array<std::byte, 4> bayer{
+        std::byte{255}, std::byte{64}, std::byte{64}, std::byte{16}};
+    const auto redPhase = raw::renderPreview(rggb, bayer);
+    BundleManifest bggr = rggb;
+    bggr.configuration.stream.format = {"SBGGR8"};
+    const auto bluePhase = raw::renderPreview(bggr, bayer);
+    require(redPhase.pixels[0] == 255 && bluePhase.pixels[2] == 255,
+            "Bayer phase must follow negotiated pixel format");
+
+    BundleManifest mono;
+    mono.configuration.stream.size = {2, 1};
+    mono.configuration.stream.format = {"Y8"};
+    mono.observedPlanes = {{2, 2}};
+    const std::array<std::byte, 2> gray{std::byte{32}, std::byte{200}};
+    const auto image = raw::renderPreview(mono, gray);
+    require(image.pixels[0] == image.pixels[1] &&
+            image.pixels[1] == image.pixels[2] &&
+            image.pixels[3] == image.pixels[4] &&
+            image.pixels[4] == image.pixels[5],
+            "monochrome preview must produce neutral RGB");
+
+    bool truncated = false;
+    try {
+        (void)raw::decodeRaw(padded,
+            std::span<const std::byte>(bytes.data(), bytes.size() - 1));
+    } catch (const Error &) {
+        truncated = true;
+    }
+    require(truncated, "truncated raw payload must be rejected");
+}
+
 void yuv420InfersPaddedChromaStride()
 {
     using namespace hscam;
@@ -166,4 +226,4 @@ void bundleRoundTrip()
 }
 }
 
-int main(){try{geometryAndModeIds();raw10Unpack();raw12Unpack();rawPartialGroups();yuv420InfersPaddedChromaStride();bundleRejectsTrailingPayload();bundleRecovery();bundleRoundTrip();std::cout<<"hscam unit tests passed\n";return 0;}catch(const std::exception&e){std::cerr<<"unit test failed: "<<e.what()<<'\n';return 1;}}
+int main(){try{geometryAndModeIds();raw10Unpack();raw12Unpack();rawPartialGroups();rawFormatAndRenderCoverage();yuv420InfersPaddedChromaStride();bundleRejectsTrailingPayload();bundleRecovery();bundleRoundTrip();std::cout<<"hscam unit tests passed\n";return 0;}catch(const std::exception&e){std::cerr<<"unit test failed: "<<e.what()<<'\n';return 1;}}
