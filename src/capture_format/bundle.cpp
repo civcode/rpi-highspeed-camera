@@ -171,8 +171,7 @@ void writeManifestFile(const std::filesystem::path &directory, const BundleManif
     {
         std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
         if (!out) throw Error("failed to create HSCAP manifest");
-        out << internal::json::stringify(manifestValue(manifest), 2) << '
-';
+        out << internal::json::stringify(manifestValue(manifest), 2) << '\\n';
         out.flush();
         if (!out) throw Error("failed to write HSCAP manifest");
     }
@@ -191,16 +190,14 @@ MetadataScan scanMetadata(const std::filesystem::path &path, std::uint64_t maxLi
 {
     MetadataScan scan; std::ifstream in(path, std::ios::binary); if (!in) return scan;
     char ch{}; std::uint64_t offset{};
-    while (in.get(ch)) { ++offset; if (ch == '
-') { ++scan.completeLines; scan.completeBytes = offset; if (maxLines && scan.completeLines >= maxLines) break; } }
+    while (in.get(ch)) { ++offset; if (ch == '\\n') { ++scan.completeLines; scan.completeBytes = offset; if (maxLines && scan.completeLines >= maxLines) break; } }
     return scan;
 }
 
 void appendRecoveredMetadata(std::ostream &out, std::uint64_t frame)
 {
     Value::Object obj{{"frame", frame}, {"sequence", Value(nullptr)}, {"request_cookie", Value(nullptr)}, {"sensor_timestamp_ns", Value(nullptr)}, {"exposure_us", Value(nullptr)}, {"frame_duration_us", Value(nullptr)}, {"analogue_gain", Value(nullptr)}, {"status", "recovered_without_metadata"}};
-    out << internal::json::stringify(Value(std::move(obj))) << '
-';
+    out << internal::json::stringify(Value(std::move(obj))) << '\\n';
 }
 }
 
@@ -235,8 +232,7 @@ void BundleWriter::append(const FrameMetadata &metadata, std::span<const PlaneVi
     std::uint64_t length{};
     for (std::size_t i=0;i<planes.size();++i){ if(impl_->manifest.observedPlanes[i].size!=planes[i].length) throw Error("HSCAP plane length changed during capture"); impl_->frames.write(reinterpret_cast<const char*>(planes[i].data.data()),planes[i].data.size()); if(!impl_->frames)throw Error("failed writing HSCAP payload"); length+=planes[i].data.size(); }
     writeU64(impl_->index,impl_->manifest.frameCount); writeU64(impl_->index,impl_->payloadOffset); writeU64(impl_->index,length); writeU64(impl_->index,impl_->manifest.frameCount); if(!impl_->index)throw Error("failed writing HSCAP index");
-    impl_->metadata << metadataLine(metadata,impl_->manifest.frameCount) << '
-'; if(!impl_->metadata) throw Error("failed writing HSCAP metadata");
+    impl_->metadata << metadataLine(metadata,impl_->manifest.frameCount) << '\\n'; if(!impl_->metadata) throw Error("failed writing HSCAP metadata");
     impl_->payloadOffset+=length; ++impl_->manifest.frameCount;
 }
 
