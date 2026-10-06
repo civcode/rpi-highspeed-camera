@@ -299,10 +299,20 @@ struct SessionState : public std::enable_shared_from_this<SessionState> {
             return;
         }
 
+        auto *buffer = request->findBuffer(stream);
+        if (!buffer) {
+            recycle(request, false);
+            return;
+        }
+
         {
             std::lock_guard lock(statsMutex);
             ++stats.requestsCompleted;
-            const std::uint64_t seq = request->sequence();
+
+            // Request::sequence() identifies queue order. FrameMetadata::sequence
+            // identifies the captured image sequence and is therefore the value
+            // that can reveal dropped sensor frames.
+            const std::uint64_t seq = buffer->metadata().sequence;
             if (lastSequence && seq > *lastSequence + 1)
                 stats.sequenceGaps += seq - *lastSequence - 1;
             lastSequence = seq;
@@ -317,10 +327,11 @@ struct SessionState : public std::enable_shared_from_this<SessionState> {
                     if (!stats.maxInterval || interval > *stats.maxInterval) stats.maxInterval = interval;
                 }
                 lastSensorTimestamp = timestamp;
-                if (firstSensorTimestamp && stats.requestsCompleted > 1) {
+                ++timestampSamples;
+                if (firstSensorTimestamp && timestampSamples > 1) {
                     const auto elapsed = timestamp - *firstSensorTimestamp;
                     if (elapsed.count() > 0)
-                        stats.measuredFps = static_cast<double>(stats.requestsCompleted - 1) * 1e9 /
+                        stats.measuredFps = static_cast<double>(timestampSamples - 1) * 1e9 /
                                             static_cast<double>(elapsed.count());
                 }
             }
@@ -348,46 +359,71 @@ struct SessionState : public std::enable_shared_from_this<SessionState> {
             throw Timeout("timed out waiting for camera frame");
         }
         libcamera::Request *request = *item;
+        libcamera::FrameBuffer *buffer = nullptr;
+        bool cpuAccessStarted = false;
 
-        FrameMetadata metadata;
-        metadata.sequence = request->sequence();
-        metadata.requestCookie = request->cookie();
-        metadata.completionTimestamp = std::chrono::steady_clock::now();
-        metadata.status = request->status() == libcamera::Request::RequestComplete
-                              ? FrameStatus::Complete
-                              : FrameStatus::Error;
-        if (auto value = request->metadata().get(libcamera::controls::SensorTimestamp))
-            metadata.sensorTimestamp = std::chrono::nanoseconds(*value);
-        if (auto value = request->metadata().get(libcamera::controls::ExposureTime))
-            metadata.exposure = std::chrono::microseconds(*value);
-        if (auto value = request->metadata().get(libcamera::controls::FrameDuration))
-            metadata.frameDuration = std::chrono::microseconds(*value);
-        if (auto value = request->metadata().get(libcamera::controls::AnalogueGain))
-            metadata.analogueGain = *value;
-
-        std::vector<PlaneView> views;
-        auto *buffer = request->findBuffer(stream);
-        if (!buffer)
-            throw CaptureFailed("completed request has no buffer for configured stream");
-        auto mappedIt = mapped.find(buffer);
-        if (mappedIt == mapped.end())
-            throw CaptureFailed("completed buffer is not mapped");
-        views.reserve(mappedIt->second.size());
-        for (std::size_t i = 0; i < mappedIt->second.size(); ++i) {
-            const auto &p = mappedIt->second[i];
-            const std::uint32_t stride = i == 0 && !config.stream.planes.empty() ? config.stream.planes.front().stride : 0;
-            views.push_back({std::span<const std::byte>(p.data, p.length), stride,
-                             static_cast<std::uint32_t>(p.length), p.fd});
-        }
-
-        dmaSync(buffer, true);
-        leasedCount.fetch_add(1, std::memory_order_acq_rel);
         try {
-            return std::make_unique<LibcameraFrameLease>(
-                shared_from_this(), request, std::move(metadata), std::move(views));
+            buffer = request->findBuffer(stream);
+            if (!buffer)
+                throw CaptureFailed("completed request has no buffer for configured stream");
+
+            auto mappedIt = mapped.find(buffer);
+            if (mappedIt == mapped.end())
+                throw CaptureFailed("completed buffer is not mapped");
+
+            const auto planeMetadata = buffer->metadata().planes();
+            if (planeMetadata.size() != mappedIt->second.size())
+                throw CaptureFailed("frame metadata plane count does not match mapped buffer");
+
+            FrameMetadata metadata;
+            metadata.sequence = buffer->metadata().sequence;
+            metadata.requestCookie = request->cookie();
+            metadata.completionTimestamp = std::chrono::steady_clock::now();
+            metadata.status = request->status() == libcamera::Request::RequestComplete
+                                  ? FrameStatus::Complete
+                                  : FrameStatus::Error;
+            if (auto value = request->metadata().get(libcamera::controls::SensorTimestamp))
+                metadata.sensorTimestamp = std::chrono::nanoseconds(*value);
+            if (auto value = request->metadata().get(libcamera::controls::ExposureTime))
+                metadata.exposure = std::chrono::microseconds(*value);
+            if (auto value = request->metadata().get(libcamera::controls::FrameDuration))
+                metadata.frameDuration = std::chrono::microseconds(*value);
+            if (auto value = request->metadata().get(libcamera::controls::AnalogueGain))
+                metadata.analogueGain = *value;
+
+            std::vector<PlaneView> views;
+            views.reserve(mappedIt->second.size());
+            for (std::size_t i = 0; i < mappedIt->second.size(); ++i) {
+                const auto &p = mappedIt->second[i];
+                const auto bytesUsed = static_cast<std::size_t>(planeMetadata[i].bytesused);
+                if (bytesUsed > p.length)
+                    throw CaptureFailed("frame metadata bytesused exceeds mapped plane length");
+
+                const std::uint32_t stride =
+                    i == 0 && !config.stream.planes.empty()
+                        ? config.stream.planes.front().stride
+                        : 0;
+                views.push_back({
+                    std::span<const std::byte>(p.data, bytesUsed),
+                    stride,
+                    static_cast<std::uint32_t>(bytesUsed),
+                    p.fd
+                });
+            }
+
+            dmaSync(buffer, true);
+            cpuAccessStarted = true;
+            leasedCount.fetch_add(1, std::memory_order_acq_rel);
+            try {
+                return std::make_unique<LibcameraFrameLease>(
+                    shared_from_this(), request, std::move(metadata), std::move(views));
+            } catch (...) {
+                leasedCount.fetch_sub(1, std::memory_order_acq_rel);
+                throw;
+            }
         } catch (...) {
-            leasedCount.fetch_sub(1, std::memory_order_acq_rel);
-            dmaSync(buffer, false);
+            if (cpuAccessStarted && buffer)
+                dmaSync(buffer, false);
             recycle(request, false);
             throw;
         }
@@ -457,6 +493,7 @@ struct SessionState : public std::enable_shared_from_this<SessionState> {
     std::optional<std::uint64_t> lastSequence;
     std::optional<std::chrono::nanoseconds> firstSensorTimestamp;
     std::optional<std::chrono::nanoseconds> lastSensorTimestamp;
+    std::uint64_t timestampSamples{};
 };
 
 LibcameraFrameLease::~LibcameraFrameLease()
