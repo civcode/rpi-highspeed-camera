@@ -50,6 +50,8 @@ This project has not published its first stable release yet.
   and sequence-gap checks.
 - Added deterministic plan provenance and publication-time evidence
   verification for case results, timing traces and visual artifacts.
+- Added an official six-sensor dataset audit that accepts only valid promoted
+  results or explicit blocked records with reasons.
 - Reused the campaign's libcamera context for post-run visual sampling.
 
 ### Build and packaging
