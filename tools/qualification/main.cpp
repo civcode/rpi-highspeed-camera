@@ -17,6 +17,7 @@
 #include <iostream>
 #include <limits>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -54,6 +55,7 @@ struct Policy {
     std::uint64_t cropPerformanceDurationMs{5000};
     bool cropPerformanceExact{true};
     std::uint64_t cropPerformanceMaxCases{};
+    bool cropPerformanceSamplePositions{};
 
     bool fpsSearchEnabled{};
     std::int64_t fpsMinFrameDurationUs{100};
@@ -265,6 +267,8 @@ Policy parsePolicy(const Value &root)
         policy.cropPerformanceDurationMs = uintOr(*performance, "duration_ms", 5000);
         policy.cropPerformanceExact = boolOr(*performance, "exact", true);
         policy.cropPerformanceMaxCases = uintOr(*performance, "max_cases", 0);
+        policy.cropPerformanceSamplePositions =
+            boolOr(*performance, "sample_positions", false);
         if (const auto *strategy = performance->find("strategy"))
             policy.cropPerformanceStrategy = strategy->asString();
     }
@@ -546,16 +550,22 @@ std::vector<TestCase> buildCases(const Policy &policy, const hscam::CameraInfo &
                                  const hscam::qualification::CropGeometry *geometry)
 {
     std::vector<TestCase> cases;
+    std::set<std::string> cropKeys;
 
-    auto addCrop = [&](hscam::Rect crop, std::uint64_t durationMs, bool exact, std::string_view prefix) {
+    auto addCrop = [&](hscam::Rect crop, std::uint64_t durationMs, bool exact,
+                       std::string_view prefix) {
         TestCase test;
         test.cameraId = camera.id;
         test.crop = crop;
         test.durationMs = durationMs;
         test.exact = exact;
         test.requireZeroDrops = policy.requireZeroDrops;
-        test.id = std::string(prefix) + "-" + testCaseKey(test);
+        const auto key = testCaseKey(test);
+        if (!cropKeys.insert(key).second)
+            return false;
+        test.id = std::string(prefix) + "-" + key;
         cases.push_back(std::move(test));
+        return true;
     };
 
     if (policy.advertisedEnabled) {
@@ -573,44 +583,108 @@ std::vector<TestCase> buildCases(const Policy &policy, const hscam::CameraInfo &
 
     if (policy.cropsEnabled) {
         for (const auto &crop : policy.crops)
-            addCrop(crop, policy.cropDurationMs, policy.cropsExact, "crop");
+            (void)addCrop(crop, policy.cropDurationMs, policy.cropsExact, "crop");
     }
 
-    if (policy.cropPerformanceEnabled && geometry && geometry->supported) {
+    if (policy.cropPerformanceEnabled && geometry && geometry->supported &&
+        !geometry->widths.empty() && !geometry->heights.empty()) {
         std::uint64_t generated{};
         const auto canAdd = [&] {
-            return !policy.cropPerformanceMaxCases || generated < policy.cropPerformanceMaxCases;
+            return !policy.cropPerformanceMaxCases ||
+                   generated < policy.cropPerformanceMaxCases;
+        };
+
+        auto centered = [&](std::uint32_t width, std::uint32_t height,
+                            std::string_view prefix) {
+            if (!canAdd()) return;
+            const auto x = geometry->bounds.x +
+                static_cast<std::int32_t>((geometry->bounds.width - width) / 2);
+            const auto y = geometry->bounds.y +
+                static_cast<std::int32_t>((geometry->bounds.height - height) / 2);
+            if (addCrop({x, y, width, height}, policy.cropPerformanceDurationMs,
+                        policy.cropPerformanceExact, prefix))
+                ++generated;
         };
 
         if (policy.cropPerformanceStrategy == "all_heights_full_width") {
             const auto width = geometry->widths.back();
             for (const auto height : geometry->heights) {
                 if (!canAdd()) break;
-                const auto x = geometry->bounds.x +
-                               static_cast<std::int32_t>((geometry->bounds.width - width) / 2);
-                const auto y = geometry->bounds.y +
-                               static_cast<std::int32_t>((geometry->bounds.height - height) / 2);
-                addCrop({x, y, width, height}, policy.cropPerformanceDurationMs,
-                        policy.cropPerformanceExact, "crop-height");
-                ++generated;
+                centered(width, height, "crop-height");
+            }
+        } else if (policy.cropPerformanceStrategy == "all_heights_width_samples") {
+            const auto &widths = geometry->widths;
+            std::set<std::uint32_t> samples{
+                widths.front(),
+                widths[widths.size() / 4],
+                widths[widths.size() / 2],
+                widths[(widths.size() * 3) / 4],
+                widths.back()
+            };
+            for (const auto height : geometry->heights) {
+                for (const auto width : samples) {
+                    if (!canAdd()) break;
+                    centered(width, height, "crop-grid");
+                }
+                if (!canAdd()) break;
             }
         } else if (policy.cropPerformanceStrategy == "all_centered_sizes") {
             for (const auto width : geometry->widths) {
                 for (const auto height : geometry->heights) {
                     if (!canAdd()) break;
-                    const auto x = geometry->bounds.x +
-                                   static_cast<std::int32_t>((geometry->bounds.width - width) / 2);
-                    const auto y = geometry->bounds.y +
-                                   static_cast<std::int32_t>((geometry->bounds.height - height) / 2);
-                    addCrop({x, y, width, height}, policy.cropPerformanceDurationMs,
-                            policy.cropPerformanceExact, "crop-size");
-                    ++generated;
+                    centered(width, height, "crop-size");
                 }
                 if (!canAdd()) break;
             }
         } else {
             throw std::runtime_error("unknown crop_performance strategy: " +
                                      policy.cropPerformanceStrategy);
+        }
+
+        if (policy.cropPerformanceSamplePositions && canAdd()) {
+            const auto &widths = geometry->widths;
+            const auto &heights = geometry->heights;
+            const std::set<std::uint32_t> sampleWidths{
+                widths.front(), widths[widths.size() / 2], widths.back()
+            };
+            const std::set<std::uint32_t> sampleHeights{
+                heights.front(), heights[heights.size() / 2], heights.back()
+            };
+
+            auto alignedEnd = [](std::int32_t begin, std::uint32_t span,
+                                 std::uint32_t size, std::uint32_t step) {
+                const auto raw = begin + static_cast<std::int32_t>(span - size);
+                if (!step) return raw;
+                const auto delta = raw - begin;
+                return begin + (delta / static_cast<std::int32_t>(step)) *
+                               static_cast<std::int32_t>(step);
+            };
+
+            for (const auto width : sampleWidths) {
+                for (const auto height : sampleHeights) {
+                    if (!canAdd()) break;
+                    const auto x0 = geometry->bounds.x;
+                    const auto y0 = geometry->bounds.y;
+                    const auto x1 = alignedEnd(x0, geometry->bounds.width, width,
+                                               geometry->xStep);
+                    const auto y1 = alignedEnd(y0, geometry->bounds.height, height,
+                                               geometry->yStep);
+                    const auto xc = x0 + (x1 - x0) / 2;
+                    const auto yc = y0 + (y1 - y0) / 2;
+                    for (const auto &rect : std::vector<hscam::Rect>{
+                             {x0, y0, width, height},
+                             {x1, y0, width, height},
+                             {x0, y1, width, height},
+                             {x1, y1, width, height},
+                             {xc, yc, width, height}}) {
+                        if (!canAdd()) break;
+                        if (addCrop(rect, policy.cropPerformanceDurationMs,
+                                    policy.cropPerformanceExact, "crop-position"))
+                            ++generated;
+                    }
+                }
+                if (!canAdd()) break;
+            }
         }
     }
 
