@@ -24,6 +24,16 @@ struct BundleManifest {
     std::uint64_t frameCount{};
 };
 
+struct BundleRecoveryResult {
+    bool wasComplete{};
+    std::uint64_t recoveredFrames{};
+    std::uint64_t discardedIndexBytes{};
+    std::uint64_t discardedPayloadBytes{};
+    std::uint64_t discardedMetadataBytes{};
+};
+
+[[nodiscard]] BundleRecoveryResult recoverBundle(const std::filesystem::path &path);
+
 class BundleWriter {
 public:
     BundleWriter(const std::filesystem::path &path, std::string cameraId, std::string cameraModel,
