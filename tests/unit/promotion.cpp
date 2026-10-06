@@ -201,6 +201,29 @@ void rejectMissingVisualVideo()
     fs::remove_all(base, ec);
 }
 
+void rejectMissingTimingEvidence()
+{
+    const auto base =
+        fs::temp_directory_path() / "hscam-promotion-test-no-timing";
+    const auto run = base / "run";
+
+    std::error_code ec;
+    fs::remove_all(base, ec);
+    createRun(run, "0123456789abcdef");
+    fs::remove(run / "cases" / "case0.timing.jsonl", ec);
+
+    bool rejected = false;
+    try {
+        (void)hscam::qualification::promoteQualificationRun(
+            run, base / "results");
+    } catch (const std::exception &) {
+        rejected = true;
+    }
+
+    require(rejected, "missing pass-case timing evidence must block promotion");
+    fs::remove_all(base, ec);
+}
+
 void rejectRecoveryFailure()
 {
     const auto base =
@@ -235,6 +258,7 @@ int main()
         rejectVisualSampleError();
         rejectTamperedPlanId();
         rejectMissingVisualVideo();
+        rejectMissingTimingEvidence();
         rejectRecoveryFailure();
         std::cout << "hscam promotion tests passed\n";
         return 0;
