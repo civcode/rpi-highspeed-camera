@@ -1336,7 +1336,8 @@ std::optional<std::size_t> findBaselineCase(const fs::path &output,
     return best;
 }
 
-void generateVisualSamples(const fs::path &output,
+void generateVisualSamples(hscam::Context &context,
+                           const fs::path &output,
                            const hscam::CameraInfo &camera,
                            const std::vector<TestCase> &cases,
                            const Policy &policy)
@@ -1370,7 +1371,7 @@ void generateVisualSamples(const fs::path &output,
 
         try {
             const auto sample = hscam::qualification::captureVisualSample(
-                spec, samplesDirectory, exporter);
+                context, spec, samplesDirectory, exporter);
             sampleResults.push_back(
                 hscam::qualification::visualSampleValue(sample, output));
         } catch (const std::exception &e) {
@@ -1725,7 +1726,7 @@ int runMain(const fs::path &manifestPath, const fs::path &output,
     }
 
     generateAggregate(output, planId, cases);
-    generateVisualSamples(output, camera, cases, policy);
+    generateVisualSamples(context, output, camera, cases, policy);
 
     writeText(output / "environment_end.json",
               hscam::internal::json::stringify(environmentValue(), 2) + "\n");
