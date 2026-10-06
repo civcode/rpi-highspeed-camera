@@ -51,6 +51,10 @@ CaptureConfiguration Camera::configure(const CaptureRequest &request) {
     if (!impl_) throw CameraNotFound("empty Camera");
     return impl_->configure(request);
 }
+CropNegotiation Camera::trySensorCrop(Rect requested) const {
+    if (!impl_) throw CameraNotFound("empty Camera");
+    return impl_->trySensorCrop(requested);
+}
 const CaptureConfiguration &Camera::configuration() const {
     if (!impl_) throw CameraNotFound("empty Camera");
     return impl_->configuration();
