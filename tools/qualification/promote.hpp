@@ -447,6 +447,7 @@ inline PromotionResult promoteQualificationRun(
 
 struct OfficialDatasetAudit {
     std::map<std::string, std::vector<std::filesystem::path>> resultsBySensor;
+    std::map<std::string, std::vector<std::filesystem::path>> blockedBySensor;
     std::vector<std::string> missingSensors;
     std::vector<std::string> invalidReceipts;
 
@@ -465,15 +466,21 @@ inline OfficialDatasetAudit auditOfficialDataset(
     };
 
     OfficialDatasetAudit audit;
-    for (const auto sensor : expected)
+    for (const auto sensor : expected) {
         audit.resultsBySensor.emplace(std::string(sensor),
                                      std::vector<fs::path>{});
+        audit.blockedBySensor.emplace(std::string(sensor),
+                                     std::vector<fs::path>{});
+    }
 
     if (fs::exists(resultsRoot)) {
         for (fs::recursive_directory_iterator it(resultsRoot), end;
              it != end; ++it) {
-            if (!it->is_regular_file() ||
-                it->path().filename() != "published.json")
+            if (!it->is_regular_file())
+                continue;
+
+            const auto filename = it->path().filename().string();
+            if (filename != "published.json" && filename != "blocked.json")
                 continue;
 
             try {
@@ -495,6 +502,18 @@ inline OfficialDatasetAudit auditOfficialDataset(
                 }
                 if (matched.empty())
                     continue;
+
+                if (filename == "blocked.json") {
+                    if (receipt.at("status").asString() != "blocked")
+                        throw std::runtime_error(
+                            "blocked.json status must be 'blocked'");
+                    const auto reason = receipt.at("reason").asString();
+                    if (reason.empty())
+                        throw std::runtime_error(
+                            "blocked.json reason must not be empty");
+                    audit.blockedBySensor[matched].push_back(it->path());
+                    continue;
+                }
 
                 const auto directory = it->path().parent_path();
                 static constexpr std::array<std::string_view, 10> required{
@@ -525,8 +544,10 @@ inline OfficialDatasetAudit auditOfficialDataset(
     }
 
     for (const auto sensor : expected) {
-        if (audit.resultsBySensor[std::string(sensor)].empty())
-            audit.missingSensors.push_back(std::string(sensor));
+        const auto key = std::string(sensor);
+        if (audit.resultsBySensor[key].empty() &&
+            audit.blockedBySensor[key].empty())
+            audit.missingSensors.push_back(key);
     }
     return audit;
 }
