@@ -1,0 +1,6 @@
+#pragma once
+
+#define HSCAM_VERSION_MAJOR 0
+#define HSCAM_VERSION_MINOR 1
+#define HSCAM_VERSION_PATCH 0
+#define HSCAM_VERSION_STRING "0.1.0-dev"
