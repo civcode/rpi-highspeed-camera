@@ -2,8 +2,9 @@
 #include "hscam/error.hpp"
 #include "hscam/raw/render.hpp"
 
-#include <png.h>
+#ifdef HSCAM_HAS_TIFF
 #include <tiffio.h>
+#endif
 
 #include <cerrno>
 #include <cstdio>
@@ -25,27 +26,7 @@ void usage()
                  "  hscam-export video CAPTURE.hscap --output preview.mp4 [--playback-fps N]\n";
 }
 
-void writePng(const std::filesystem::path &path, const hscam::raw::RenderedImage &image)
-{
-    FILE *file = std::fopen(path.c_str(), "wb");
-    if (!file) throw hscam::Error("failed to open PNG output");
-    png_structp png = png_create_write_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
-    png_infop info = png ? png_create_info_struct(png) : nullptr;
-    if (!png || !info) { if (png) png_destroy_write_struct(&png, nullptr); std::fclose(file); throw hscam::Error("libpng allocation failed"); }
-    if (setjmp(png_jmpbuf(png))) { png_destroy_write_struct(&png, &info); std::fclose(file); throw hscam::Error("libpng write failed"); }
-    png_init_io(png, file);
-    png_set_IHDR(png, info, image.size.width, image.size.height, 8, PNG_COLOR_TYPE_RGB,
-                 PNG_INTERLACE_NONE, PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
-    png_write_info(png, info);
-    std::vector<png_bytep> rows(image.size.height);
-    for (std::uint32_t y = 0; y < image.size.height; ++y)
-        rows[y] = const_cast<png_bytep>(image.pixels.data() + static_cast<std::size_t>(y) * image.size.width * 3);
-    png_write_image(png, rows.data());
-    png_write_end(png, nullptr);
-    png_destroy_write_struct(&png, &info);
-    std::fclose(file);
-}
-
+#ifdef HSCAM_HAS_TIFF
 std::uint16_t cfaCode(hscam::raw::BayerOrder order, int i)
 {
     static constexpr std::uint8_t patterns[][4] = {{1,1,1,1},{0,1,1,2},{1,0,2,1},{1,2,0,1},{2,1,1,0}};
@@ -87,6 +68,13 @@ void writeDng(const std::filesystem::path &path, const hscam::BundleManifest &ma
         if (TIFFWriteScanline(tif, row, y, 0) < 0) throw hscam::Error("failed writing DNG scanline");
     }
 }
+
+#else
+void writeDng(const std::filesystem::path &, const hscam::BundleManifest &, std::span<const std::byte>)
+{
+    throw hscam::Unsupported("DNG export was not built because libtiff was not found");
+}
+#endif
 
 class FfmpegPipe {
 public:
@@ -165,7 +153,7 @@ int main(int argc, char **argv)
         }
         if (output.empty()) throw std::runtime_error("--output is required");
         if (command == "image") {
-            writePng(output, hscam::raw::renderPreview(m, reader.readFrame(frame)));
+            hscam::raw::writePng(output, hscam::raw::renderPreview(m, reader.readFrame(frame)));
         } else if (command == "dng") {
             const auto payload = reader.readFrame(frame);
             writeDng(output, m, payload);
