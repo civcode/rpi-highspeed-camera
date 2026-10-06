@@ -6,7 +6,7 @@ This document defines the first implementation of the production C++ library for
 
 The first implementation is intentionally small. Its job is to make Raspberry Pi camera capture understandable, deterministic, and measurable while exposing the sensor-level controls needed for high-frame-rate work.
 
-It is **not** the qualification harness described in [Official Raspberry Pi camera qualification protocol](official-camera-qualification-protocol.md), and it is not initially a computer-vision framework.
+It is **not** the one-time official-camera qualification harness, and it is not initially a computer-vision framework. Qualification is a separate consumer of this library rather than part of its runtime API.
 
 The first vertical slice should do this reliably:
 
@@ -1162,4 +1162,3 @@ Project design documents:
 
 - [High-FPS capture method](high-fps-capture-method.md)
 - [Camera support and automated crop testing](camera-support-and-crop-testing.md)
-- [Official Raspberry Pi camera qualification protocol](official-camera-qualification-protocol.md)
