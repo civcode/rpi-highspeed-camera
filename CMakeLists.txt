@@ -73,6 +73,24 @@ add_executable(hscam-capture tools/capture/main.cpp)
 target_link_libraries(hscam-capture PRIVATE hscam::hscam)
 target_compile_options(hscam-capture PRIVATE -Wall -Wextra -Wpedantic)
 
+find_package(Git QUIET)
+set(HSCAM_SOURCE_REVISION "unknown")
+if(Git_FOUND)
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} rev-parse --verify HEAD
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        OUTPUT_VARIABLE HSCAM_SOURCE_REVISION
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+endif()
+
+add_executable(hscam-qualify tools/qualification/main.cpp)
+target_link_libraries(hscam-qualify PRIVATE hscam::hscam)
+target_include_directories(hscam-qualify PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_compile_definitions(hscam-qualify PRIVATE HSCAM_SOURCE_REVISION="${HSCAM_SOURCE_REVISION}")
+target_compile_options(hscam-qualify PRIVATE -Wall -Wextra -Wpedantic)
+
 if(HSCAM_BUILD_TESTS)
     enable_testing()
     add_executable(hscam-unit-tests tests/unit/main.cpp)
