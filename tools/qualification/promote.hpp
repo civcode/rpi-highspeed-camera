@@ -377,7 +377,7 @@ inline PromotionResult promoteQualificationRun(
         {"environment.json", true},
         {"environment_end.json", true},
         {"camera.json", true},
-        {"mode_sensor_crops.json", false},
+        {"mode_sensor_crops.json", true},
         {"crop_geometry.json", false},
         {"crop_geometry_probes.jsonl", false},
         {"campaign_status.json", true},
