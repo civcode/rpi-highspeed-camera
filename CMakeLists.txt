@@ -86,7 +86,7 @@ if(Git_FOUND)
 endif()
 
 add_executable(hscam-qualify tools/qualification/main.cpp)
-target_link_libraries(hscam-qualify PRIVATE hscam::hscam)
+target_link_libraries(hscam-qualify PRIVATE hscam::hscam hscam::raw)
 target_include_directories(hscam-qualify PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_definitions(hscam-qualify PRIVATE HSCAM_SOURCE_REVISION="${HSCAM_SOURCE_REVISION}")
 target_compile_options(hscam-qualify PRIVATE -Wall -Wextra -Wpedantic)
