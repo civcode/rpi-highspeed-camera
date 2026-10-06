@@ -105,6 +105,30 @@ void rejectDirtyRevision()
     fs::remove_all(base, ec);
 }
 
+void rejectVisualSampleError()
+{
+    const auto base =
+        fs::temp_directory_path() / "hscam-promotion-test-visual";
+    const auto run = base / "run";
+
+    std::error_code ec;
+    fs::remove_all(base, ec);
+    createRun(run, "0123456789abcdef");
+    write(run / "samples.json",
+          R"({"schema_version":1,"samples":[{"label":"fastest","error":"ffmpeg failed"}]})");
+
+    bool rejected = false;
+    try {
+        (void)hscam::qualification::promoteQualificationRun(
+            run, base / "results");
+    } catch (const std::exception &) {
+        rejected = true;
+    }
+
+    require(rejected, "visual sample errors must block promotion");
+    fs::remove_all(base, ec);
+}
+
 void rejectRecoveryFailure()
 {
     const auto base =
@@ -136,6 +160,7 @@ int main()
     try {
         validPromotion();
         rejectDirtyRevision();
+        rejectVisualSampleError();
         rejectRecoveryFailure();
         std::cout << "hscam promotion tests passed\n";
         return 0;
