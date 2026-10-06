@@ -50,6 +50,8 @@ struct CameraInfo {
     std::vector<Rect> activeAreas;
     std::vector<SensorMode> sensorModes;
     CameraCapabilities capabilities;
+    std::vector<std::int64_t> systemDevices;
+    std::optional<std::string> sensorSubdevice;
 };
 
 std::string stableModeId(const SensorMode &mode);

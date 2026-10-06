@@ -21,6 +21,7 @@ add_library(hscam
     src/context.cpp
     src/camera.cpp
     src/types.cpp
+    src/media/sensor_subdevice.cpp
 )
 add_library(hscam::hscam ALIAS hscam)
 
