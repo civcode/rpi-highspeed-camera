@@ -57,7 +57,7 @@ A run may be copied from `qualification/work/` into this directory only when:
 - start/end environment snapshots are present;
 - the camera inventory and result aggregates are present;
 - `recovery_failure.json` is absent;
-- any visual-sample generation errors are preserved rather than hidden.
+- visual sampling is present when enabled, and no visual sample records a generation/export error.
 
 Do not delete rejected, unsupported or unstable cases. They are part of the measured capability boundary.
 
