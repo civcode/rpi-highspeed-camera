@@ -865,7 +865,19 @@ private:
 
 std::shared_ptr<Context::Impl> makeLibcameraContext()
 {
-    return std::make_shared<LibcameraContext>();
+    // libcamera permits only one CameraManager instance per process.
+    // Multiple public hscam::Context values therefore share the same backend
+    // while any of them (or an active Camera/CaptureSession) is alive.
+    static std::mutex singletonMutex;
+    static std::weak_ptr<Context::Impl> singleton;
+
+    std::lock_guard lock(singletonMutex);
+    if (auto existing = singleton.lock())
+        return existing;
+
+    auto created = std::make_shared<LibcameraContext>();
+    singleton = created;
+    return created;
 }
 
 } // namespace hscam
