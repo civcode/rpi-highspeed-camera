@@ -1,5 +1,6 @@
 #include "hscam/camera_info.hpp"
 #include "hscam/capture_bundle.hpp"
+#include "hscam/error.hpp"
 #include "hscam/geometry.hpp"
 #include "hscam/raw/render.hpp"
 
