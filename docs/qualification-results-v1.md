@@ -401,7 +401,8 @@ hscam-qualify promote RUN_DIR \
 
 The promoter checks schema versions, campaign validity, clean committed source
 provenance, required start/end environment artifacts, absence of
-`recovery_failure.json`, and enabled visual-sample representation. It copies
+`recovery_failure.json`, and enabled visual-sample integrity. A recorded
+visual-sample error blocks publication rather than being silently accepted. It copies
 derived visual evidence while intentionally omitting large raw `.hscap`
 sample directories and records omissions in `published.json`.
 
@@ -414,7 +415,7 @@ Reference results under `qualification/results/` should satisfy all of the follo
 5. `camera.json` identifies the tested camera.
 6. `results.json`, `results.csv` and `report.md` are present.
 7. `recovery_failure.json` is absent.
-8. Visual evidence is present when enabled by the campaign, or the failure to generate it is explicitly represented in `samples.json`.
+8. Visual evidence is present when enabled by the campaign, and no sample entry records a generation/export error. A visual error is preserved in `samples.json` for diagnosis but blocks promotion.
 9. No result files are manually rewritten to make a test appear successful.
 
 Rejected and unstable test cases should remain in the dataset. They define the measured boundary and are part of the result.
