@@ -385,6 +385,7 @@ Value cameraValue(const hscam::CameraInfo &camera)
     };
 
     return Value::Object{
+        {"schema_version", static_cast<std::uint64_t>(1)},
         {"id", camera.id},
         {"model", camera.model},
         {"sensor_model", camera.sensorModel ? Value(*camera.sensorModel) : Value(nullptr)},
@@ -410,6 +411,7 @@ Value environmentValue()
     }
 
     Value::Object environment{
+        {"schema_version", static_cast<std::uint64_t>(1)},
         {"hscam_version", HSCAM_VERSION_STRING},
         {"source_revision", HSCAM_SOURCE_REVISION},
         {"board_model", readOptional("/proc/device-tree/model")},
@@ -1232,8 +1234,12 @@ void generateVisualSamples(const fs::path &output,
     if (const auto fastest = findFastestCase(output, cases))
         capture("fastest", *fastest, policy.visualSampleFrames);
 
+    const Value samples = Value::Object{
+        {"schema_version", static_cast<std::uint64_t>(1)},
+        {"samples", std::move(sampleResults)}
+    };
     writeText(output / "samples.json",
-              hscam::internal::json::stringify(Value(std::move(sampleResults)), 2) + "\n");
+              hscam::internal::json::stringify(samples, 2) + "\n");
 }
 
 void usage()
