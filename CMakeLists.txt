@@ -22,6 +22,7 @@ add_library(hscam
     src/camera.cpp
     src/types.cpp
     src/media/sensor_subdevice.cpp
+    src/capture_format/bundle.cpp
 )
 add_library(hscam::hscam ALIAS hscam)
 
@@ -29,6 +30,8 @@ target_include_directories(hscam
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
 target_compile_features(hscam PUBLIC cxx_std_20)
