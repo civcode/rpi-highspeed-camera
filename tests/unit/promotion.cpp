@@ -41,7 +41,8 @@ void createRun(const fs::path &run, std::string sourceRevision)
           std::string{
               R"({"schema_version":1,"plan_id":")"} + planId +
               R"(","campaign":"official-rpi-cameras-v1","hscam_version":")" +
-              version + R"(","source_revision":")" + sourceRevision + R"("})");
+              version + R"(","source_revision":")" + sourceRevision +
+              R"(","cases":[{"case_id":"case0"}]})");
     write(run / "camera.json",
           R"({"schema_version":1,"id":"camera0","model":"imx296","sensor_model":"imx296"})");
     write(run / "environment.json",
@@ -51,7 +52,7 @@ void createRun(const fs::path &run, std::string sourceRevision)
     write(run / "results.json",
           std::string{
               R"({"schema_version":1,"plan_id":")"} + planId +
-              R"(","summary":{"pass":1},"results":[]})");
+              R"(","summary":{"pass":1},"results":[{"case_id":"case0","status":"pass"}]})");
     write(run / "results.csv", "case_id,status\ncase0,pass\n");
     write(run / "report.md", "# Result\n");
     write(run / "samples.json",
@@ -62,7 +63,7 @@ void createRun(const fs::path &run, std::string sourceRevision)
     write(run / "samples" / "raw.hscap" / "manifest.json",
           R"({"schema_version":1})");
     write(run / "cases" / "case0.json",
-          R"({"case_id":"case0","status":"pass"})");
+          R"({"case_id":"case0","status":"pass","timing_trace":"case0.timing.jsonl"})");
     write(run / "cases" / "case0.timing.jsonl",
           R"({"frame":0,"sequence":1,"sensor_timestamp_ns":123})");
     write(run / "search" / "case0" / "1000-1500.json",
