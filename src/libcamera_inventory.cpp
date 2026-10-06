@@ -5,7 +5,6 @@
 #include "media/sensor_subdevice.hpp"
 
 #include <algorithm>
-#include <array>
 #include <atomic>
 #include <cerrno>
 #include <chrono>
@@ -18,7 +17,6 @@
 #include <mutex>
 #include <optional>
 #include <set>
-#include <span>
 #include <string>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
@@ -264,9 +262,7 @@ struct SessionState : public std::enable_shared_from_this<SessionState> {
         libcamera::ControlList controls(camera->controls());
         if (config.timing.requestedFrameDuration) {
             const std::int64_t us = config.timing.requestedFrameDuration->count();
-            const std::array<std::int64_t, 2> limits{us, us};
-            controls.set(libcamera::controls::FrameDurationLimits,
-                         std::span<const std::int64_t, 2>(limits));
+            controls.set(libcamera::controls::FrameDurationLimits, {us, us});
         }
         if (config.timing.exposure) {
             if (camera->controls().contains(libcamera::controls::ExposureTimeMode.id()))
