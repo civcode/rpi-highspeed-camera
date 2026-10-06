@@ -83,6 +83,16 @@ if(Git_FOUND)
         OUTPUT_STRIP_TRAILING_WHITESPACE
         ERROR_QUIET
     )
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} status --porcelain --untracked-files=normal
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        OUTPUT_VARIABLE HSCAM_GIT_DIRTY
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(HSCAM_GIT_DIRTY)
+        string(APPEND HSCAM_SOURCE_REVISION "-dirty")
+    endif()
 endif()
 
 add_executable(hscam-qualify tools/qualification/main.cpp)
