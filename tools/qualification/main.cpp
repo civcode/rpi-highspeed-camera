@@ -66,6 +66,7 @@ struct Policy {
     std::uint64_t fpsMaxIterations{16};
     std::uint64_t fpsToleranceUs{2};
     double fpsAchievedRatio{0.99};
+    double fpsMaxIntervalRatio{1.5};
 
     bool requireNoThrottling{true};
     bool visualSamplesEnabled{true};
@@ -299,12 +300,16 @@ Policy parsePolicy(const Value &root)
         policy.fpsToleranceUs = uintOr(*fps, "tolerance_us", 2);
         if (const auto *ratio = fps->find("achieved_ratio"))
             policy.fpsAchievedRatio = ratio->asNumber();
+        if (const auto *ratio = fps->find("max_interval_ratio"))
+            policy.fpsMaxIntervalRatio = ratio->asNumber();
 
         if (policy.fpsMinFrameDurationUs <= 0 ||
             policy.fpsMaxFrameDurationUs < policy.fpsMinFrameDurationUs)
             throw std::runtime_error("invalid fps_search frame-duration range");
         if (!(policy.fpsAchievedRatio > 0.0 && policy.fpsAchievedRatio <= 1.0))
             throw std::runtime_error("fps_search achieved_ratio must be in (0,1]");
+        if (policy.fpsMaxIntervalRatio < 1.0)
+            throw std::runtime_error("fps_search max_interval_ratio must be >= 1");
     }
 
     if (const auto *environment = root.find("environment"))
@@ -489,6 +494,55 @@ Value captureConfigurationValue(const hscam::CaptureConfiguration &config)
     };
 }
 
+struct TimingSample {
+    std::uint64_t frame{};
+    std::uint64_t sequence{};
+    std::optional<std::int64_t> sensorTimestampNs;
+    std::optional<std::int64_t> frameDurationUs;
+    std::optional<std::int64_t> exposureUs;
+    hscam::FrameStatus status{hscam::FrameStatus::Complete};
+};
+
+std::filesystem::path timingTracePath(const std::filesystem::path &resultPath)
+{
+    auto trace = resultPath;
+    trace.replace_extension(".timing.jsonl");
+    return trace;
+}
+
+void writeTimingTrace(const std::filesystem::path &resultPath,
+                      const std::vector<TimingSample> &samples)
+{
+    const auto tracePath = timingTracePath(resultPath);
+    std::ofstream out(tracePath, std::ios::binary | std::ios::trunc);
+    if (!out)
+        throw std::runtime_error("failed to create timing trace: " +
+                                 tracePath.string());
+
+    for (const auto &sample : samples) {
+        Value::Object row{
+            {"frame", sample.frame},
+            {"sequence", sample.sequence},
+            {"sensor_timestamp_ns",
+             sample.sensorTimestampNs ? Value(*sample.sensorTimestampNs)
+                                      : Value(nullptr)},
+            {"frame_duration_us",
+             sample.frameDurationUs ? Value(*sample.frameDurationUs)
+                                    : Value(nullptr)},
+            {"exposure_us",
+             sample.exposureUs ? Value(*sample.exposureUs) : Value(nullptr)},
+            {"status",
+             sample.status == hscam::FrameStatus::Complete ? "complete" :
+             (sample.status == hscam::FrameStatus::Cancelled ? "cancelled" :
+                                                               "error")}
+        };
+        out << hscam::internal::json::stringify(Value(std::move(row))) << '\n';
+    }
+    if (!out)
+        throw std::runtime_error("failed writing timing trace: " +
+                                 tracePath.string());
+}
+
 Value statsValue(const hscam::CaptureStats &stats)
 {
     Value::Object object{
@@ -507,6 +561,7 @@ Value statsValue(const hscam::CaptureStats &stats)
 int workerMain(const fs::path &casePath, const fs::path &resultPath)
 {
     Value::Object result;
+    std::vector<TimingSample> timingSamples;
     try {
         const TestCase test = parseCase(hscam::internal::json::parse(readAll(casePath)));
         result["case_id"] = test.id;
@@ -539,6 +594,18 @@ int workerMain(const fs::path &casePath, const fs::path &resultPath)
             auto frame = session.nextFrame(std::chrono::milliseconds(2500));
             const auto &metadata = frame.metadata();
             ++consumed;
+            TimingSample timing;
+            timing.frame = consumed - 1;
+            timing.sequence = metadata.sequence;
+            if (metadata.sensorTimestamp)
+                timing.sensorTimestampNs = metadata.sensorTimestamp->count();
+            if (metadata.frameDuration)
+                timing.frameDurationUs = metadata.frameDuration->count();
+            if (metadata.exposure)
+                timing.exposureUs = metadata.exposure->count();
+            timing.status = metadata.status;
+            timingSamples.push_back(timing);
+
             if (metadata.frameDuration) lastFrameDurationUs = metadata.frameDuration->count();
             if (metadata.sensorTimestamp) {
                 if (!firstSensorTimestampNs) firstSensorTimestampNs = metadata.sensorTimestamp->count();
@@ -547,6 +614,8 @@ int workerMain(const fs::path &casePath, const fs::path &resultPath)
         }
 
         session.stop();
+        writeTimingTrace(resultPath, timingSamples);
+        result["timing_trace"] = timingTracePath(resultPath).filename().string();
         const auto stats = session.stats();
         result["stats"] = statsValue(stats);
         result["frames_consumed"] = consumed;
@@ -561,6 +630,14 @@ int workerMain(const fs::path &casePath, const fs::path &resultPath)
         result["status"] = clean || !test.requireZeroDrops ? "pass" : "unstable";
         result["error"] = nullptr;
     } catch (const std::exception &e) {
+        if (!timingSamples.empty()) {
+            try {
+                writeTimingTrace(resultPath, timingSamples);
+                result["timing_trace"] =
+                    timingTracePath(resultPath).filename().string();
+            } catch (...) {
+            }
+        }
         result["status"] = "error";
         result["error"] = e.what();
     }
@@ -808,7 +885,8 @@ bool verifyRecovery(const fs::path &executable, const fs::path &output,
 Value timeoutResult(const TestCase &test);
 
 bool probeStable(const Value &result, std::int64_t requestedUs,
-                 double achievedRatio, std::uint64_t toleranceUs)
+                 double achievedRatio, std::uint64_t toleranceUs,
+                 double maxIntervalRatio)
 {
     if (result.at("status").asString() != "pass")
         return false;
@@ -819,6 +897,15 @@ bool probeStable(const Value &result, std::int64_t requestedUs,
     const double requestedFps = 1000000.0 / static_cast<double>(requestedUs);
     if (stats->at("measured_fps").asNumber() < requestedFps * achievedRatio)
         return false;
+
+    if (const auto *maxInterval = stats->find("max_interval_ns")) {
+        if (!maxInterval->isNull()) {
+            const double allowedNs =
+                static_cast<double>(requestedUs) * 1000.0 * maxIntervalRatio;
+            if (static_cast<double>(maxInterval->asInt64()) > allowedNs)
+                return false;
+        }
+    }
 
     if (const auto *duration = result.find("last_frame_duration_us")) {
         if (!duration->isNull()) {
@@ -884,7 +971,8 @@ Value runFpsSearch(const fs::path &executable, const fs::path &output,
         const Value result = runProbe(executable, output, base, durationUs, durationMs,
                                       policy.workerTimeoutMs, rerun);
         const bool stable = probeStable(result, durationUs, policy.fpsAchievedRatio,
-                                        policy.fpsToleranceUs);
+                                        policy.fpsToleranceUs,
+                                        policy.fpsMaxIntervalRatio);
         double fps{};
         if (const auto *stats = result.find("stats")) {
             if (!stats->at("measured_fps").isNull())
