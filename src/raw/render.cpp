@@ -182,14 +182,24 @@ RenderedImage renderYuv420(const BundleManifest &manifest, std::span<const std::
     const auto h = manifest.configuration.stream.size.height;
     if (!w || !h) throw Error("invalid YUV420 dimensions");
 
-    const std::size_t yStride = manifest.observedPlanes.empty() || !manifest.observedPlanes[0].stride
-                                    ? w : manifest.observedPlanes[0].stride;
-    std::size_t uStride = yStride / 2, vStride = yStride / 2;
-    std::size_t yOff = 0, uOff = yStride * h, vOff = uOff + uStride * ((h + 1) / 2);
+    const std::size_t yStride =
+        manifest.observedPlanes.empty() || !manifest.observedPlanes[0].stride
+            ? w
+            : manifest.observedPlanes[0].stride;
+    const std::size_t inferredChromaStride = (yStride + 1) / 2;
+    std::size_t uStride = inferredChromaStride;
+    std::size_t vStride = inferredChromaStride;
+    std::size_t yOff = 0;
+    std::size_t uOff = yStride * h;
+    std::size_t vOff = uOff + uStride * ((h + 1) / 2);
 
     if (manifest.observedPlanes.size() >= 3) {
-        uStride = manifest.observedPlanes[1].stride ? manifest.observedPlanes[1].stride : (w + 1) / 2;
-        vStride = manifest.observedPlanes[2].stride ? manifest.observedPlanes[2].stride : (w + 1) / 2;
+        uStride = manifest.observedPlanes[1].stride
+                      ? manifest.observedPlanes[1].stride
+                      : inferredChromaStride;
+        vStride = manifest.observedPlanes[2].stride
+                      ? manifest.observedPlanes[2].stride
+                      : inferredChromaStride;
         uOff = planeOffset(manifest, 1);
         vOff = planeOffset(manifest, 2);
     }
