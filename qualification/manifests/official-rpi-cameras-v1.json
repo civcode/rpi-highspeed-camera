@@ -34,7 +34,8 @@
     "final_duration_ms": 10000,
     "max_iterations": 16,
     "tolerance_us": 2,
-    "achieved_ratio": 0.99
+    "achieved_ratio": 0.99,
+    "max_interval_ratio": 1.5
   },
   "environment": {
     "require_no_throttling": true
