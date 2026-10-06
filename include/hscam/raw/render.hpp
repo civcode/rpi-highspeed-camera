@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <span>
 #include <string>
 #include <vector>
@@ -37,5 +38,6 @@ struct RenderedImage {
 RawLayout describePixelFormat(const std::string &pixelFormat);
 RawFrame16 decodeRaw(const BundleManifest &manifest, std::span<const std::byte> payload);
 RenderedImage renderPreview(const BundleManifest &manifest, std::span<const std::byte> payload);
+void writePng(const std::filesystem::path &path, const RenderedImage &image);
 
 } // namespace hscam::raw
