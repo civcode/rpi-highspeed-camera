@@ -156,8 +156,20 @@ install(
 
 if(HSCAM_BUILD_TESTS)
     enable_testing()
+
     add_executable(hscam-unit-tests tests/unit/main.cpp)
     target_link_libraries(hscam-unit-tests PRIVATE hscam::hscam hscam::raw)
     target_compile_options(hscam-unit-tests PRIVATE -Wall -Wextra -Wpedantic)
     add_test(NAME hscam-unit-tests COMMAND hscam-unit-tests)
+
+    add_executable(hscam-promotion-tests tests/unit/promotion.cpp)
+    target_include_directories(
+        hscam-promotion-tests
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
+            ${CMAKE_CURRENT_SOURCE_DIR}/tools/qualification
+    )
+    target_compile_features(hscam-promotion-tests PRIVATE cxx_std_20)
+    target_compile_options(hscam-promotion-tests PRIVATE -Wall -Wextra -Wpedantic)
+    add_test(NAME hscam-promotion-tests COMMAND hscam-promotion-tests)
 endif()
