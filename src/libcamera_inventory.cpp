@@ -299,11 +299,6 @@ struct SessionState : public std::enable_shared_from_this<SessionState> {
             return;
         }
 
-        for (const auto &[streamPtr, buffer] : request->buffers()) {
-            (void)streamPtr;
-            dmaSync(buffer, true);
-        }
-
         {
             std::lock_guard lock(statsMutex);
             ++stats.requestsCompleted;
@@ -336,7 +331,7 @@ struct SessionState : public std::enable_shared_from_this<SessionState> {
                 std::lock_guard lock(statsMutex);
                 ++stats.completedQueueOverruns;
             }
-            recycle(request);
+            recycle(request, false);
         }
     }
 
@@ -344,7 +339,9 @@ struct SessionState : public std::enable_shared_from_this<SessionState> {
     {
         auto item = completed.popFor(timeout);
         if (!item) {
-            if (running.load(std::memory_order_acquire)) {
+            const auto leased = leasedCount.load(std::memory_order_acquire);
+            if (running.load(std::memory_order_acquire) &&
+                !requests.empty() && leased >= requests.size()) {
                 std::lock_guard lock(statsMutex);
                 ++stats.consumerStarvations;
             }
@@ -383,14 +380,32 @@ struct SessionState : public std::enable_shared_from_this<SessionState> {
                              static_cast<std::uint32_t>(p.length), p.fd});
         }
 
-        return std::make_unique<LibcameraFrameLease>(shared_from_this(), request, std::move(metadata), std::move(views));
+        dmaSync(buffer, true);
+        leasedCount.fetch_add(1, std::memory_order_acq_rel);
+        try {
+            return std::make_unique<LibcameraFrameLease>(
+                shared_from_this(), request, std::move(metadata), std::move(views));
+        } catch (...) {
+            leasedCount.fetch_sub(1, std::memory_order_acq_rel);
+            dmaSync(buffer, false);
+            recycle(request, false);
+            throw;
+        }
     }
 
-    void recycle(libcamera::Request *request)
+    void releaseLease(libcamera::Request *request)
     {
-        for (const auto &[streamPtr, buffer] : request->buffers()) {
-            (void)streamPtr;
-            dmaSync(buffer, false);
+        leasedCount.fetch_sub(1, std::memory_order_acq_rel);
+        recycle(request, true);
+    }
+
+    void recycle(libcamera::Request *request, bool cpuAccessStarted)
+    {
+        if (cpuAccessStarted) {
+            for (const auto &[streamPtr, buffer] : request->buffers()) {
+                (void)streamPtr;
+                dmaSync(buffer, false);
+            }
         }
         if (!running.load(std::memory_order_acquire))
             return;
@@ -433,6 +448,7 @@ struct SessionState : public std::enable_shared_from_this<SessionState> {
     std::map<libcamera::FrameBuffer *, std::vector<MappedPlane>> mapped;
     internal::BoundedQueue<libcamera::Request *> completed;
     std::atomic_bool running{};
+    std::atomic<std::size_t> leasedCount{};
     std::atomic_bool started{};
     std::atomic_bool stopped{};
     bool connected{};
@@ -446,7 +462,7 @@ struct SessionState : public std::enable_shared_from_this<SessionState> {
 LibcameraFrameLease::~LibcameraFrameLease()
 {
     if (state_ && request_)
-        state_->recycle(request_);
+        state_->releaseLease(request_);
 }
 
 class LibcameraSession final : public CaptureSession::Impl {
