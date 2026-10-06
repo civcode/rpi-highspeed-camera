@@ -7,13 +7,25 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <functional>
 #include <numeric>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace hscam::qualification {
+
+struct CropProbeRecord {
+    std::string phase;
+    Rect requested;
+    std::optional<Rect> negotiated;
+    bool exact{};
+    std::optional<std::string> error;
+};
+
+using CropProbeSink = std::function<void(const CropProbeRecord &)>;
 
 struct CropGeometryPolicy {
     bool enabled{true};
@@ -47,38 +59,68 @@ inline std::uint32_t stepFromOrigins(const std::vector<std::int32_t> &values)
     return step;
 }
 
-inline std::vector<std::uint32_t> probeWidths(Camera &camera, Rect bounds, std::uint32_t height)
+inline void emitCropProbe(const CropProbeSink &sink, std::string phase,
+                          Rect requested,
+                          const std::optional<CropNegotiation> &result,
+                          std::optional<std::string> error = std::nullopt)
+{
+    if (!sink) return;
+    CropProbeRecord record;
+    record.phase = std::move(phase);
+    record.requested = requested;
+    if (result) {
+        record.negotiated = result->negotiated;
+        record.exact = result->exact;
+    }
+    record.error = std::move(error);
+    sink(record);
+}
+
+inline std::vector<std::uint32_t> probeWidths(Camera &camera, Rect bounds,
+                                              std::uint32_t height,
+                                              const CropProbeSink &sink)
 {
     std::set<std::uint32_t> accepted;
     for (std::uint32_t width = 1; width <= bounds.width; ++width) {
         const auto x = bounds.x + static_cast<std::int32_t>((bounds.width - width) / 2);
         const auto y = bounds.y + static_cast<std::int32_t>((bounds.height - height) / 2);
+        const Rect requested{x, y, width, height};
         try {
-            const auto result = camera.trySensorCrop({x, y, width, height});
+            const auto result = camera.trySensorCrop(requested);
+            emitCropProbe(sink, "width", requested, result);
             if (result.negotiated.width && result.negotiated.height)
                 accepted.insert(result.negotiated.width);
         } catch (const Unsupported &) {
             throw;
+        } catch (const std::exception &e) {
+            emitCropProbe(sink, "width", requested, std::nullopt, e.what());
         } catch (...) {
-            // An individual TRY request may be rejected. Continue probing the axis.
+            emitCropProbe(sink, "width", requested, std::nullopt, "unknown error");
         }
     }
     return {accepted.begin(), accepted.end()};
 }
 
-inline std::vector<std::uint32_t> probeHeights(Camera &camera, Rect bounds, std::uint32_t width)
+inline std::vector<std::uint32_t> probeHeights(Camera &camera, Rect bounds,
+                                               std::uint32_t width,
+                                               const CropProbeSink &sink)
 {
     std::set<std::uint32_t> accepted;
     for (std::uint32_t height = 1; height <= bounds.height; ++height) {
         const auto x = bounds.x + static_cast<std::int32_t>((bounds.width - width) / 2);
         const auto y = bounds.y + static_cast<std::int32_t>((bounds.height - height) / 2);
+        const Rect requested{x, y, width, height};
         try {
-            const auto result = camera.trySensorCrop({x, y, width, height});
+            const auto result = camera.trySensorCrop(requested);
+            emitCropProbe(sink, "height", requested, result);
             if (result.negotiated.width && result.negotiated.height)
                 accepted.insert(result.negotiated.height);
         } catch (const Unsupported &) {
             throw;
+        } catch (const std::exception &e) {
+            emitCropProbe(sink, "height", requested, std::nullopt, e.what());
         } catch (...) {
+            emitCropProbe(sink, "height", requested, std::nullopt, "unknown error");
         }
     }
     return {accepted.begin(), accepted.end()};
@@ -92,7 +134,8 @@ inline void mergeUnique(std::vector<std::uint32_t> &into, const std::vector<std:
 }
 
 inline CropGeometry discoverCropGeometry(Camera &camera, const CameraInfo &info,
-                                         const CropGeometryPolicy &policy)
+                                         const CropGeometryPolicy &policy,
+                                         const CropProbeSink &sink = {})
 {
     CropGeometry geometry;
     if (!policy.enabled || !info.capabilities.sensorCropTryable ||
@@ -104,16 +147,18 @@ inline CropGeometry discoverCropGeometry(Camera &camera, const CameraInfo &info,
     if (geometry.bounds.empty())
         throw std::runtime_error("sensor reports an empty crop bound");
 
-    geometry.widths = probeWidths(camera, geometry.bounds, geometry.bounds.height);
-    geometry.heights = probeHeights(camera, geometry.bounds, geometry.bounds.width);
+    geometry.widths = probeWidths(camera, geometry.bounds, geometry.bounds.height, sink);
+    geometry.heights = probeHeights(camera, geometry.bounds, geometry.bounds.width, sink);
 
     if (geometry.widths.empty() || geometry.heights.empty())
         throw std::runtime_error("TRY crop probing returned no valid dimensions");
 
     // Repeat at the discovered minima to catch dimensions that are only valid
     // when the other axis is also reduced.
-    mergeUnique(geometry.widths, probeWidths(camera, geometry.bounds, geometry.heights.front()));
-    mergeUnique(geometry.heights, probeHeights(camera, geometry.bounds, geometry.widths.front()));
+    mergeUnique(geometry.widths,
+                probeWidths(camera, geometry.bounds, geometry.heights.front(), sink));
+    mergeUnique(geometry.heights,
+                probeHeights(camera, geometry.bounds, geometry.widths.front(), sink));
 
     const auto minWidth = geometry.widths.front();
     const auto minHeight = geometry.heights.front();
@@ -125,11 +170,16 @@ inline CropGeometry discoverCropGeometry(Camera &camera, const CameraInfo &info,
         const auto last = geometry.bounds.x +
                           static_cast<std::int32_t>(geometry.bounds.width - minWidth);
         for (std::int32_t x = geometry.bounds.x; x <= last; ++x) {
+            const Rect requested{x, y, minWidth, minHeight};
             try {
-                const auto result = camera.trySensorCrop({x, y, minWidth, minHeight});
+                const auto result = camera.trySensorCrop(requested);
+                emitCropProbe(sink, "x_origin", requested, result);
                 if (result.negotiated.width == minWidth && result.negotiated.height == minHeight)
                     origins.insert(result.negotiated.x);
+            } catch (const std::exception &e) {
+                emitCropProbe(sink, "x_origin", requested, std::nullopt, e.what());
             } catch (...) {
+                emitCropProbe(sink, "x_origin", requested, std::nullopt, "unknown error");
             }
         }
         geometry.xOriginsForMinimumSize.assign(origins.begin(), origins.end());
@@ -143,11 +193,16 @@ inline CropGeometry discoverCropGeometry(Camera &camera, const CameraInfo &info,
         const auto last = geometry.bounds.y +
                           static_cast<std::int32_t>(geometry.bounds.height - minHeight);
         for (std::int32_t y = geometry.bounds.y; y <= last; ++y) {
+            const Rect requested{x, y, minWidth, minHeight};
             try {
-                const auto result = camera.trySensorCrop({x, y, minWidth, minHeight});
+                const auto result = camera.trySensorCrop(requested);
+                emitCropProbe(sink, "y_origin", requested, result);
                 if (result.negotiated.width == minWidth && result.negotiated.height == minHeight)
                     origins.insert(result.negotiated.y);
+            } catch (const std::exception &e) {
+                emitCropProbe(sink, "y_origin", requested, std::nullopt, e.what());
             } catch (...) {
+                emitCropProbe(sink, "y_origin", requested, std::nullopt, "unknown error");
             }
         }
         geometry.yOriginsForMinimumSize.assign(origins.begin(), origins.end());
@@ -168,11 +223,16 @@ inline CropGeometry discoverCropGeometry(Camera &camera, const CameraInfo &info,
                                static_cast<std::int32_t>((geometry.bounds.height - height) / 2);
                 ++geometry.cartesianChecks;
                 bool exact = false;
+                const Rect requested{x, y, width, height};
                 try {
-                    const auto result = camera.trySensorCrop({x, y, width, height});
+                    const auto result = camera.trySensorCrop(requested);
+                    emitCropProbe(sink, "cartesian", requested, result);
                     exact = result.negotiated.width == width &&
                             result.negotiated.height == height;
+                } catch (const std::exception &e) {
+                    emitCropProbe(sink, "cartesian", requested, std::nullopt, e.what());
                 } catch (...) {
+                    emitCropProbe(sink, "cartesian", requested, std::nullopt, "unknown error");
                 }
 
                 if (!exact) {
