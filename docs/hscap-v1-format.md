@@ -73,7 +73,7 @@ Values above are illustrative.
 - `stream.pixel_format`: negotiated libcamera pixel-format string.
 - `stream.width` / `height`: negotiated stream dimensions.
 - `stream.frame_bytes`: negotiated frame size from libcamera.
-- `stream.planes`: **observed** plane layout from delivered buffers. Each object records `stride` and `size`.
+- `stream.planes`: observed plane layout from delivered buffers. Each object records `stride` and `size`. A `stride` value of `0` means that the backend could not obtain an independent stride for that plane; it must not be interpreted as tightly packed. For planar YUV420, the v0.1 renderer infers an unknown chroma stride from the negotiated padded luma stride.
 - `timing.requested_frame_duration_us`: requested fixed frame duration, if one was supplied.
 - `timing.exposure_us`: requested exposure, if supplied.
 - `timing.analogue_gain`: requested analogue gain, if supplied.
