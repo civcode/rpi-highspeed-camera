@@ -480,6 +480,14 @@ public:
 
     const std::string &id() const override { return id_; }
 
+    CropNegotiation trySensorCrop(Rect requested) const override
+    {
+        if (!sensor_ || !sensor_->info().capabilities.sensorCropTryable)
+            throw Unsupported("camera does not expose TRY sensor-crop negotiation");
+        const auto result = sensor_->tryCrop(requested);
+        return {result.requested, result.negotiated, result.exact};
+    }
+
     CaptureConfiguration configure(const CaptureRequest &request) override
     {
         if (configured_)
