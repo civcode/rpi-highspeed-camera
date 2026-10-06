@@ -78,6 +78,7 @@ struct TestCase {
     std::optional<std::string> modeId;
     std::optional<hscam::Rect> crop;
     std::optional<std::int64_t> frameDurationUs;
+    hscam::StreamKind streamKind{hscam::StreamKind::Raw};
     std::uint64_t durationMs{3000};
     bool exact{true};
     bool requireZeroDrops{true};
@@ -316,6 +317,7 @@ Value caseValue(const TestCase &test)
         {"mode_id", test.modeId ? Value(*test.modeId) : Value(nullptr)},
         {"crop", rectValue(test.crop)},
         {"frame_duration_us", test.frameDurationUs ? Value(*test.frameDurationUs) : Value(nullptr)},
+        {"stream_kind", test.streamKind == hscam::StreamKind::Raw ? "raw" : "processed"},
         {"duration_ms", test.durationMs},
         {"exact", test.exact},
         {"require_zero_drops", test.requireZeroDrops}
@@ -331,6 +333,11 @@ TestCase parseCase(const Value &root)
     if (!root.at("mode_id").isNull()) test.modeId = root.at("mode_id").asString();
     test.crop = parseRect(root.at("crop"));
     if (!root.at("frame_duration_us").isNull()) test.frameDurationUs = root.at("frame_duration_us").asInt64();
+    if (const auto *kind = root.find("stream_kind")) {
+        if (kind->asString() == "raw") test.streamKind = hscam::StreamKind::Raw;
+        else if (kind->asString() == "processed") test.streamKind = hscam::StreamKind::Processed;
+        else throw std::runtime_error("invalid qualification stream_kind");
+    }
     test.durationMs = root.at("duration_ms").asUInt64();
     test.exact = root.at("exact").asBool();
     test.requireZeroDrops = root.at("require_zero_drops").asBool();
@@ -347,6 +354,7 @@ std::string testCaseKey(const TestCase &test)
         canonical << test.crop->x << ',' << test.crop->y << ',' << test.crop->width << ',' << test.crop->height;
     canonical << '|';
     if (test.frameDurationUs) canonical << *test.frameDurationUs;
+    canonical << '|' << (test.streamKind == hscam::StreamKind::Raw ? "raw" : "processed");
     canonical << '|' << test.durationMs << '|' << test.exact << '|' << test.requireZeroDrops;
     return fnvHex(canonical.str());
 }
@@ -492,7 +500,7 @@ int workerMain(const fs::path &casePath, const fs::path &resultPath)
         auto camera = context.open(test.cameraId);
 
         hscam::CaptureRequest request;
-        request.stream.kind = hscam::StreamKind::Raw;
+        request.stream.kind = test.streamKind;
         request.negotiation = test.exact ? hscam::NegotiationPolicy::Exact
                                          : hscam::NegotiationPolicy::AllowAdjustments;
         request.sensor.modeId = test.modeId;
@@ -557,6 +565,7 @@ std::vector<TestCase> buildCases(const Policy &policy, const hscam::CameraInfo &
         TestCase test;
         test.cameraId = camera.id;
         test.crop = crop;
+        test.streamKind = hscam::StreamKind::Processed;
         test.durationMs = durationMs;
         test.exact = exact;
         test.requireZeroDrops = policy.requireZeroDrops;
@@ -573,6 +582,7 @@ std::vector<TestCase> buildCases(const Policy &policy, const hscam::CameraInfo &
             TestCase test;
             test.cameraId = camera.id;
             test.modeId = mode.id;
+            test.streamKind = hscam::StreamKind::Raw;
             test.durationMs = policy.advertisedDurationMs;
             test.exact = false;
             test.requireZeroDrops = policy.requireZeroDrops;
@@ -911,8 +921,10 @@ std::string cropLabel(const TestCase &test)
 
 std::string caseType(const TestCase &test)
 {
-    if (test.crop) return "sensor_crop";
-    if (test.modeId) return "advertised_mode";
+    if (test.crop) return test.streamKind == hscam::StreamKind::Processed
+                              ? "sensor_crop_processed"
+                              : "sensor_crop_raw";
+    if (test.modeId) return "advertised_mode_raw";
     return "capture";
 }
 
