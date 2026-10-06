@@ -733,6 +733,11 @@ int runIsolated(const fs::path &executable, const fs::path &casePath,
     }
 }
 
+bool verifyRecovery(const fs::path &executable, const fs::path &output,
+                    const hscam::CameraInfo &camera,
+                    std::uint64_t workerTimeoutMs,
+                    std::string &error);
+
 Value timeoutResult(const TestCase &test);
 
 bool probeStable(const Value &result, std::int64_t requestedUs,
@@ -892,6 +897,55 @@ Value timeoutResult(const TestCase &test)
         {"status", "timeout"},
         {"error", "qualification worker exceeded hard timeout"}
     };
+}
+
+bool verifyRecovery(const fs::path &executable, const fs::path &output,
+                    const hscam::CameraInfo &camera,
+                    std::uint64_t workerTimeoutMs,
+                    std::string &error)
+{
+    TestCase health;
+    health.id = "recovery-health";
+    health.cameraId = camera.id;
+    health.durationMs = 750;
+    health.exact = false;
+    health.requireZeroDrops = false;
+
+    if (!camera.sensorModes.empty()) {
+        health.streamKind = hscam::StreamKind::Raw;
+        health.modeId = camera.sensorModes.front().id;
+    } else {
+        health.streamKind = hscam::StreamKind::Processed;
+    }
+
+    const auto casePath = output / "work" / "recovery-health.json";
+    const auto resultPath = output / "work" / "recovery-health-result.json";
+    writeText(casePath,
+              hscam::internal::json::stringify(caseValue(health), 2) + "\n");
+
+    std::error_code ec;
+    fs::remove(resultPath, ec);
+
+    const int rc = runIsolated(executable, casePath, resultPath,
+                               std::max<std::uint64_t>(workerTimeoutMs, 10000));
+    if (rc != 0 || !fs::exists(resultPath)) {
+        error = "recovery worker failed with exit code " + std::to_string(rc);
+        return false;
+    }
+
+    try {
+        const auto result = hscam::internal::json::parse(readAll(resultPath));
+        if (result.at("status").asString() != "pass") {
+            error = resultError(result);
+            if (error.empty()) error = "baseline health capture did not pass";
+            return false;
+        }
+    } catch (const std::exception &e) {
+        error = e.what();
+        return false;
+    }
+
+    return true;
 }
 
 std::string csvEscape(std::string_view value)
@@ -1310,6 +1364,32 @@ int runMain(const fs::path &manifestPath, const fs::path &output,
                 std::cout << " " << result.at("status").asString() << "\n";
             }
         }
+
+        const auto completedResultPath = output / "cases" / (test.id + ".json");
+        if (fs::exists(completedResultPath)) {
+            const auto completedResult =
+                hscam::internal::json::parse(readAll(completedResultPath));
+            if (completedResult.at("status").asString() != "pass") {
+                std::string recoveryError;
+                std::cout << "  recovery check" << std::flush;
+                if (!verifyRecovery(executable, output, camera,
+                                    policy.workerTimeoutMs, recoveryError)) {
+                    std::cout << " failed\n";
+                    const Value recoveryFailure = Value::Object{
+                        {"schema_version", static_cast<std::uint64_t>(1)},
+                        {"after_case", test.id},
+                        {"error", recoveryError}
+                    };
+                    writeText(output / "recovery_failure.json",
+                              hscam::internal::json::stringify(recoveryFailure, 2) + "\n");
+                    throw std::runtime_error(
+                        "camera failed recovery check after " + test.id +
+                        ": " + recoveryError);
+                }
+                std::cout << " pass\n";
+            }
+        }
+
         ++completed;
     }
 
