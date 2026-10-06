@@ -29,7 +29,9 @@ A completed run contains approximately:
     environment.json
     environment_end.json
     camera.json
+    mode_sensor_crops.json
     crop_geometry.json
+    crop_geometry_probes.jsonl
     campaign_status.json
     results.json
     results.csv
@@ -38,11 +40,13 @@ A completed run contains approximately:
 
     cases/
         <case-id>.json
+        <case-id>.timing.jsonl
         ...
 
     search/
         <case-id>/
             <frame-duration>-<duration>.json
+            <frame-duration>-<duration>.timing.jsonl
             ...
 
     work/
@@ -184,6 +188,12 @@ Capabilities distinguish raw/processed capture and sensor-crop query/TRY/ACTIVE 
 
 This file describes what the runtime stack exposed during the campaign; it should not be treated as a timeless specification of the sensor.
 
+## mode_sensor_crops.json
+
+The runner configures each advertised raw mode independently and records the sensor crop visible after libcamera configuration. This distinguishes a fixed sensor-mode crop from an arbitrary mutable sensor crop and makes mode-dependent readout geometry explicit.
+
+Each mode entry records the mode ID, size and pixel format, the negotiated libcamera configuration, the active sensor crop when available, and any configuration/readback error.
+
 ## crop_geometry.json
 
 Written when crop discovery is enabled.
@@ -200,6 +210,10 @@ The geometry result records the sensor driver's observed TRY-selection behavior,
 - exceptions when width and height acceptance is not independent.
 
 Geometry acceptance is not the same as stable high-FPS capture. Performance is measured in separate cases.
+
+## crop_geometry_probes.jsonl
+
+When crop discovery is enabled, every V4L2 TRY-selection probe is preserved as one JSON object per line. Records include the discovery phase, requested rectangle, negotiated rectangle when available, exact/non-exact result, and error text for rejected probes. This is the raw audit trail behind the inferred geometry summary.
 
 ## cases/<case-id>.json
 
@@ -234,6 +248,7 @@ A direct capture case normally includes:
   "last_frame_duration_us": 1866,
   "first_sensor_timestamp_ns": 123,
   "last_sensor_timestamp_ns": 456,
+  "timing_trace": "<case-id>.timing.jsonl",
   "status": "pass",
   "error": null
 }
@@ -253,6 +268,10 @@ The important status classes are:
 
 A non-pass experimental result triggers a known-good camera recovery capture. If that recovery fails, the campaign aborts and writes `recovery_failure.json`.
 
+### Per-frame timing trace
+
+Every completed worker capture writes a sibling `.timing.jsonl` file after capture stops, so audit logging cannot perturb the timing-critical loop. Each line preserves the observed frame index, captured sequence number, sensor timestamp when available, delivered frame duration, exposure and frame status. Pass-case timing traces are required for a campaign to be marked valid.
+
 ## FPS-search result
 
 When FPS search is enabled, the final case result summarizes a set of isolated probe runs.
@@ -268,11 +287,11 @@ Important fields include:
 
 The search does not assume that a requested frame duration was achieved.
 
-A probe is considered stable only when it satisfies the campaign's requirements, including delivered FPS relative to the requested frame duration and the zero-drop policy.
+A probe is considered stable only when it satisfies the campaign's requirements, including delivered FPS relative to the requested frame duration, the zero-drop policy, and the configured maximum single-frame interval ratio. This prevents one long timestamp gap from being hidden by an acceptable average FPS.
 
 The discovered boundary is then re-run for the longer `final_duration_ms` validation period.
 
-Intermediate probe results are retained under `search/<case-id>/`.
+Intermediate probe results and their per-frame timing JSONL traces are retained under `search/<case-id>/`.
 
 ## results.json
 
@@ -376,7 +395,9 @@ This is the final promotion gate:
 
 Only a run with `valid: true` is eligible for promotion to the checked-in reference dataset.
 
-A valid campaign status does not mean every tested geometry passed. Unsupported, unstable or rejected cases are legitimate scientific results. It means the campaign environment itself remained acceptable.
+For v1, validity also requires every passing case to retain per-frame timing evidence and, when visual sampling is enabled, usable PNG evidence plus at least one video artifact. Thermal/throttling requirements must also remain satisfied.
+
+A valid campaign status does not mean every tested geometry passed. Unsupported, unstable or rejected cases are legitimate scientific results. It means the campaign itself completed with the required audit evidence and an acceptable environment.
 
 ## Recovery failure
 
@@ -399,12 +420,7 @@ hscam-qualify promote RUN_DIR \
   --results-root qualification/results
 ```
 
-The promoter checks schema versions, campaign validity, clean committed source
-provenance, required start/end environment artifacts, absence of
-`recovery_failure.json`, and enabled visual-sample integrity. A recorded
-visual-sample error blocks publication rather than being silently accepted. It copies
-derived visual evidence while intentionally omitting large raw `.hscap`
-sample directories and records omissions in `published.json`.
+The promoter checks schema versions, campaign validity, clean committed source provenance, recomputes the deterministic plan ID, verifies that `results.json` belongs to the same plan, checks required start/end environment artifacts, rejects `recovery_failure.json`, and enforces enabled visual-sample integrity. It preserves the per-case and FPS-search JSON plus timing traces, along with derived visual evidence, while intentionally omitting large raw `.hscap` sample directories and recording those omissions in `published.json`.
 
 Reference results under `qualification/results/` should satisfy all of the following:
 
@@ -415,8 +431,10 @@ Reference results under `qualification/results/` should satisfy all of the follo
 5. `camera.json` identifies the tested camera.
 6. `results.json`, `results.csv` and `report.md` are present.
 7. `recovery_failure.json` is absent.
-8. Visual evidence is present when enabled by the campaign, and no sample entry records a generation/export error. A visual error is preserved in `samples.json` for diagnosis but blocks promotion.
-9. No result files are manually rewritten to make a test appear successful.
+8. Visual evidence is present when enabled by the campaign: samples contain PNG evidence, at least one video is present, and no sample entry records a generation/export error.
+9. Passing cases retain their per-frame timing traces and search evidence.
+10. `plan_id` recomputes from the exact manifest text, camera ID, hscam version and clean source revision, and `results.json` carries the same ID.
+11. No result files are manually rewritten to make a test appear successful.
 
 Rejected and unstable test cases should remain in the dataset. They define the measured boundary and are part of the result.
 
