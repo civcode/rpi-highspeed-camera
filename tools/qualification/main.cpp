@@ -1472,6 +1472,7 @@ void usage()
         << "usage:\n"
         << "  hscam-qualify run MANIFEST.json --output DIR [--camera ID] [--rerun]\n"
         << "  hscam-qualify promote RUN_DIR --results-root DIR\n"
+        << "  hscam-qualify audit-results --results-root DIR\n"
         << "  hscam-qualify --worker CASE.json RESULT.json\n";
 }
 
@@ -1745,6 +1746,47 @@ int main(int argc, char **argv)
     try {
         if (argc == 4 && std::string_view(argv[1]) == "--worker")
             return workerMain(argv[2], argv[3]);
+
+        if (argc >= 2 && std::string_view(argv[1]) == "audit-results") {
+            fs::path resultsRoot;
+            for (int i = 2; i < argc; ++i) {
+                const std::string arg = argv[i];
+                if (arg == "--results-root" && i + 1 < argc)
+                    resultsRoot = argv[++i];
+                else {
+                    usage();
+                    return 2;
+                }
+            }
+            if (resultsRoot.empty())
+                throw std::runtime_error("--results-root is required");
+
+            const auto audit =
+                hscam::qualification::auditOfficialDataset(resultsRoot);
+
+            for (const auto &[sensor, results] : audit.resultsBySensor) {
+                const auto blocked = audit.blockedBySensor.at(sensor).size();
+                std::cout << sensor << ": ";
+                if (!results.empty())
+                    std::cout << "published (" << results.size() << ")";
+                else if (blocked)
+                    std::cout << "blocked (" << blocked << ")";
+                else
+                    std::cout << "missing";
+                std::cout << "\n";
+            }
+
+            for (const auto &invalid : audit.invalidReceipts)
+                std::cerr << "invalid receipt: " << invalid << "\n";
+
+            if (audit.complete()) {
+                std::cout << "official dataset gate: complete\n";
+                return 0;
+            }
+
+            std::cerr << "official dataset gate: incomplete\n";
+            return 3;
+        }
 
         if (argc >= 2 && std::string_view(argv[1]) == "promote") {
             if (argc < 5) {
