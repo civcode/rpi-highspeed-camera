@@ -44,6 +44,7 @@ public:
 
     [[nodiscard]] const std::string &id() const;
     [[nodiscard]] CaptureConfiguration configure(const CaptureRequest &request);
+    [[nodiscard]] CropNegotiation trySensorCrop(Rect requested) const;
     [[nodiscard]] const CaptureConfiguration &configuration() const;
     [[nodiscard]] CaptureSession start();
     [[nodiscard]] explicit operator bool() const noexcept;
