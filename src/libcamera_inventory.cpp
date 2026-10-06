@@ -261,8 +261,15 @@ struct SessionState : public std::enable_shared_from_this<SessionState> {
         camera->requestCompleted.connect(this, &SessionState::requestComplete);
         connected = true;
 
-        libcamera::ControlList controls(camera->controls());
+        const auto &supportedControls = camera->controls();
+        libcamera::ControlList controls(supportedControls);
+
         if (config.timing.requestedFrameDuration) {
+            if (!supportedControls.contains(
+                    libcamera::controls::FrameDurationLimits.id()))
+                throw Unsupported(
+                    "camera does not support FrameDurationLimits");
+
             const std::int64_t us =
                 config.timing.requestedFrameDuration->count();
             const std::array<std::int64_t, 2> limits{us, us};
@@ -270,16 +277,59 @@ struct SessionState : public std::enable_shared_from_this<SessionState> {
                 libcamera::controls::FrameDurationLimits,
                 std::span<const std::int64_t, 2>(limits));
         }
-        if (config.timing.exposure) {
-            if (camera->controls().contains(libcamera::controls::ExposureTimeMode.id()))
-                controls.set(libcamera::controls::ExposureTimeMode, libcamera::controls::ExposureTimeModeManual);
-            controls.set(libcamera::controls::ExposureTime,
-                         static_cast<std::int32_t>(config.timing.exposure->count()));
+
+        const bool exposureRequested =
+            config.timing.exposure.has_value();
+        const bool gainRequested =
+            config.timing.analogueGain.has_value();
+
+        if (exposureRequested &&
+            !supportedControls.contains(
+                libcamera::controls::ExposureTime.id()))
+            throw Unsupported(
+                "camera does not support manual exposure time");
+        if (gainRequested &&
+            !supportedControls.contains(
+                libcamera::controls::AnalogueGain.id()))
+            throw Unsupported(
+                "camera does not support manual analogue gain");
+
+        const bool exposureModeSupported =
+            supportedControls.contains(
+                libcamera::controls::ExposureTimeMode.id());
+        const bool gainModeSupported =
+            supportedControls.contains(
+                libcamera::controls::AnalogueGainMode.id());
+
+        if ((exposureRequested && !exposureModeSupported) ||
+            (gainRequested && !gainModeSupported)) {
+            if (!supportedControls.contains(
+                    libcamera::controls::AeEnable.id()))
+                throw Unsupported(
+                    "camera cannot switch requested exposure/gain "
+                    "controls to manual mode");
+            controls.set(libcamera::controls::AeEnable, false);
         }
-        if (config.timing.analogueGain) {
-            if (camera->controls().contains(libcamera::controls::AnalogueGainMode.id()))
-                controls.set(libcamera::controls::AnalogueGainMode, libcamera::controls::AnalogueGainModeManual);
-            controls.set(libcamera::controls::AnalogueGain, static_cast<float>(*config.timing.analogueGain));
+
+        if (exposureRequested) {
+            if (exposureModeSupported)
+                controls.set(
+                    libcamera::controls::ExposureTimeMode,
+                    libcamera::controls::ExposureTimeModeManual);
+            controls.set(
+                libcamera::controls::ExposureTime,
+                static_cast<std::int32_t>(
+                    config.timing.exposure->count()));
+        }
+
+        if (gainRequested) {
+            if (gainModeSupported)
+                controls.set(
+                    libcamera::controls::AnalogueGainMode,
+                    libcamera::controls::AnalogueGainModeManual);
+            controls.set(
+                libcamera::controls::AnalogueGain,
+                static_cast<float>(*config.timing.analogueGain));
         }
 
         const int startRc = controls.empty() ? camera->start() : camera->start(&controls);
