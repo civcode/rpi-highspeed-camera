@@ -936,7 +936,9 @@ bool verifyRecovery(const fs::path &executable, const fs::path &output,
     try {
         const auto result = hscam::internal::json::parse(readAll(resultPath));
         if (result.at("status").asString() != "pass") {
-            error = resultError(result);
+            if (const auto *failure = result.find("error")) {
+                if (!failure->isNull()) error = failure->asString();
+            }
             if (error.empty()) error = "baseline health capture did not pass";
             return false;
         }
