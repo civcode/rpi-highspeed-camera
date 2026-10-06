@@ -36,6 +36,28 @@ ctest --test-dir build --output-on-failure
 
 The core library does not depend on OpenCV, FFmpeg, OpenVINO, or an image-processing framework.
 
+For a library-only build:
+
+```bash
+cmake -S . -B build \
+  -DHSCAM_BUILD_TOOLS=OFF
+
+cmake --build build -j
+cmake --install build --prefix /desired/prefix
+```
+
+The installed CMake package exports:
+
+- `hscam::hscam` — capture/discovery library;
+- `hscam::raw` — HSCAP/raw reconstruction and preview library.
+
+A downstream CMake project can use:
+
+```cmake
+find_package(hscam 0.1 REQUIRED CONFIG)
+target_link_libraries(my_app PRIVATE hscam::hscam hscam::raw)
+```
+
 ## Inspect a camera
 
 ```bash
@@ -94,6 +116,14 @@ Inspect a capture:
 ```bash
 build/hscam-export inspect cropped.hscap
 ```
+
+If capture was interrupted, recovery can salvage fully indexed payload frames and explicitly mark metadata that did not survive:
+
+```bash
+build/hscam-export recover interrupted.hscap
+```
+
+A recovered interrupted bundle remains marked incomplete and must not be used as valid qualification timing data.
 
 Render one frame to PNG:
 
@@ -182,11 +212,13 @@ qualification/work/<camera>/
         fastest-slow-motion.mp4
 ```
 
-Only runs with `campaign_status.json` reporting `"valid": true` should be promoted into the checked-in results dataset.
+Only runs with `campaign_status.json` reporting `"valid": true` should be promoted into the checked-in results dataset. Promotion rules live in [qualification/results/README.md](qualification/results/README.md).
 
 ## Design documents
 
 - [v0.1 implementation roadmap](docs/v0.1-implementation-roadmap.md)
+- [HSCAP v1 format](docs/hscap-v1-format.md)
+- [qualification results v1](docs/qualification-results-v1.md)
 - [C++ library first implementation](docs/cpp-library-first-implementation.md)
 - [raw visualization and export](docs/raw-visualization-and-export.md)
 - [camera support and crop testing](docs/camera-support-and-crop-testing.md)
