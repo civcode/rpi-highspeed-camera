@@ -2,9 +2,11 @@
 #include "hscam/error.hpp"
 #include "hscam/version.hpp"
 #include "internal/json.hpp"
+#include "crop_geometry.hpp"
 
 #include <algorithm>
 #include <cerrno>
+#include <cctype>
 #include <chrono>
 #include <csignal>
 #include <cstdint>
@@ -16,6 +18,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <stdexcept>
 #include <sys/types.h>
 #include <sys/utsname.h>
 #include <sys/wait.h>
@@ -41,6 +44,14 @@ struct Policy {
     std::uint64_t cropDurationMs{3000};
     bool cropsExact{true};
     std::vector<hscam::Rect> crops;
+
+    hscam::qualification::CropGeometryPolicy geometry;
+
+    bool cropPerformanceEnabled{};
+    std::string cropPerformanceStrategy{"all_heights_full_width"};
+    std::uint64_t cropPerformanceDurationMs{5000};
+    bool cropPerformanceExact{true};
+    std::uint64_t cropPerformanceMaxCases{};
 };
 
 struct TestCase {
@@ -220,6 +231,23 @@ Policy parsePolicy(const Value &root)
                 if (rect) policy.crops.push_back(*rect);
             }
         }
+    }
+
+    if (const auto *geometry = root.find("crop_geometry")) {
+        policy.geometry.enabled = boolOr(*geometry, "enabled", true);
+        policy.geometry.verifyCartesian = boolOr(*geometry, "verify_cartesian", true);
+        policy.geometry.maxCartesianChecks = uintOr(*geometry, "max_cartesian_checks", 0);
+    } else {
+        policy.geometry.enabled = false;
+    }
+
+    if (const auto *performance = root.find("crop_performance")) {
+        policy.cropPerformanceEnabled = boolOr(*performance, "enabled", false);
+        policy.cropPerformanceDurationMs = uintOr(*performance, "duration_ms", 5000);
+        policy.cropPerformanceExact = boolOr(*performance, "exact", true);
+        policy.cropPerformanceMaxCases = uintOr(*performance, "max_cases", 0);
+        if (const auto *strategy = performance->find("strategy"))
+            policy.cropPerformanceStrategy = strategy->asString();
     }
     return policy;
 }
@@ -445,9 +473,21 @@ int workerMain(const fs::path &casePath, const fs::path &resultPath)
     return 0;
 }
 
-std::vector<TestCase> buildCases(const Policy &policy, const hscam::CameraInfo &camera)
+std::vector<TestCase> buildCases(const Policy &policy, const hscam::CameraInfo &camera,
+                                 const hscam::qualification::CropGeometry *geometry)
 {
     std::vector<TestCase> cases;
+
+    auto addCrop = [&](hscam::Rect crop, std::uint64_t durationMs, bool exact, std::string_view prefix) {
+        TestCase test;
+        test.cameraId = camera.id;
+        test.crop = crop;
+        test.durationMs = durationMs;
+        test.exact = exact;
+        test.requireZeroDrops = policy.requireZeroDrops;
+        test.id = std::string(prefix) + "-" + testCaseKey(test);
+        cases.push_back(std::move(test));
+    };
 
     if (policy.advertisedEnabled) {
         for (const auto &mode : camera.sensorModes) {
@@ -463,15 +503,45 @@ std::vector<TestCase> buildCases(const Policy &policy, const hscam::CameraInfo &
     }
 
     if (policy.cropsEnabled) {
-        for (const auto &crop : policy.crops) {
-            TestCase test;
-            test.cameraId = camera.id;
-            test.crop = crop;
-            test.durationMs = policy.cropDurationMs;
-            test.exact = policy.cropsExact;
-            test.requireZeroDrops = policy.requireZeroDrops;
-            test.id = "crop-" + testCaseKey(test);
-            cases.push_back(std::move(test));
+        for (const auto &crop : policy.crops)
+            addCrop(crop, policy.cropDurationMs, policy.cropsExact, "crop");
+    }
+
+    if (policy.cropPerformanceEnabled && geometry && geometry->supported) {
+        std::uint64_t generated{};
+        const auto canAdd = [&] {
+            return !policy.cropPerformanceMaxCases || generated < policy.cropPerformanceMaxCases;
+        };
+
+        if (policy.cropPerformanceStrategy == "all_heights_full_width") {
+            const auto width = geometry->widths.back();
+            for (const auto height : geometry->heights) {
+                if (!canAdd()) break;
+                const auto x = geometry->bounds.x +
+                               static_cast<std::int32_t>((geometry->bounds.width - width) / 2);
+                const auto y = geometry->bounds.y +
+                               static_cast<std::int32_t>((geometry->bounds.height - height) / 2);
+                addCrop({x, y, width, height}, policy.cropPerformanceDurationMs,
+                        policy.cropPerformanceExact, "crop-height");
+                ++generated;
+            }
+        } else if (policy.cropPerformanceStrategy == "all_centered_sizes") {
+            for (const auto width : geometry->widths) {
+                for (const auto height : geometry->heights) {
+                    if (!canAdd()) break;
+                    const auto x = geometry->bounds.x +
+                                   static_cast<std::int32_t>((geometry->bounds.width - width) / 2);
+                    const auto y = geometry->bounds.y +
+                                   static_cast<std::int32_t>((geometry->bounds.height - height) / 2);
+                    addCrop({x, y, width, height}, policy.cropPerformanceDurationMs,
+                            policy.cropPerformanceExact, "crop-size");
+                    ++generated;
+                }
+                if (!canAdd()) break;
+            }
+        } else {
+            throw std::runtime_error("unknown crop_performance strategy: " +
+                                     policy.cropPerformanceStrategy);
         }
     }
 
@@ -606,7 +676,29 @@ int runMain(const fs::path &manifestPath, const fs::path &output,
     writeText(output / "camera.json",
               hscam::internal::json::stringify(cameraValue(camera), 2) + "\n");
 
-    auto cases = buildCases(policy, camera);
+    std::optional<hscam::qualification::CropGeometry> geometry;
+    if (policy.geometry.enabled) {
+        {
+            auto cropCamera = context.open(camera.id);
+            geometry = hscam::qualification::discoverCropGeometry(
+                cropCamera, camera, policy.geometry);
+        }
+        writeText(output / "crop_geometry.json",
+                  hscam::internal::json::stringify(
+                      hscam::qualification::geometryValue(*geometry), 2) + "\n");
+        if (geometry->supported) {
+            std::cout << "crop geometry: " << geometry->widths.size() << " widths x "
+                      << geometry->heights.size() << " heights";
+            if (policy.geometry.verifyCartesian)
+                std::cout << ", Cartesian checks=" << geometry->cartesianChecks
+                          << ", exceptions=" << geometry->cartesianExceptions;
+            std::cout << "\n";
+        } else {
+            std::cout << "crop geometry: sensor crop TRY not supported\n";
+        }
+    }
+
+    auto cases = buildCases(policy, camera, geometry ? &*geometry : nullptr);
     Value::Array casePlan;
     for (const auto &test : cases) casePlan.push_back(caseValue(test));
     const Value plan = Value::Object{
