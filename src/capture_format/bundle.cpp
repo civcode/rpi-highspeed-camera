@@ -151,8 +151,12 @@ BundleFrameMetadata parseFrameMetadata(const Value &root)
         metadata.frameDuration = std::chrono::microseconds(value->asInt64());
     if (const auto *value = root.find("analogue_gain"); value && !value->isNull())
         metadata.analogueGain = value->asNumber();
-    if (const auto *value = root.find("status"); value && !value->isNull())
-        metadata.status = value->asString();
+    const auto *status = root.find("status");
+    if (!status || status->isNull() || !status->isString())
+        throw Error("HSCAP frame metadata is missing status");
+    metadata.status = status->asString();
+    if (metadata.status.empty())
+        throw Error("HSCAP frame metadata status is empty");
 
     return metadata;
 }
@@ -249,16 +253,39 @@ BundleReader::BundleReader(const std::filesystem::path &path) : path_(path)
     if (!in.read(magic, sizeof(magic)) || std::memcmp(magic, "HSCIDX01", 8) != 0)
         throw Error("invalid HSCAP index magic");
 
+    std::error_code sizeError;
+    const auto payloadBytes = std::filesystem::file_size(path / "frames.bin", sizeError);
+    if (sizeError)
+        throw Error("failed to inspect HSCAP payload: " + sizeError.message());
+
+    std::uint64_t expectedOffset{};
     while (in.peek() != std::char_traits<char>::eof()) {
         IndexRecord record;
         record.frame = readU64(in);
         record.offset = readU64(in);
         record.length = readU64(in);
         record.metadataLine = readU64(in);
+
+        const auto expectedFrame = static_cast<std::uint64_t>(index_.size());
+        if (record.frame != expectedFrame)
+            throw Error("HSCAP index frame sequence mismatch");
+        if (record.metadataLine != expectedFrame)
+            throw Error("HSCAP index metadata sequence mismatch");
+        if (record.offset != expectedOffset)
+            throw Error("HSCAP index payload offsets are not contiguous");
+        if (record.length > std::numeric_limits<std::uint64_t>::max() - record.offset)
+            throw Error("HSCAP index payload range overflows");
+        const auto end = record.offset + record.length;
+        if (end > payloadBytes)
+            throw Error("HSCAP index references payload beyond frames.bin");
+
+        expectedOffset = end;
         index_.push_back(record);
     }
     if (index_.size() != manifest_.frameCount)
         throw Error("HSCAP manifest/index frame count mismatch");
+    if (expectedOffset != payloadBytes)
+        throw Error("HSCAP payload contains unindexed trailing bytes; run hscam-export recover");
 
     std::ifstream metadataFile(path / "metadata.jsonl");
     if (!metadataFile)
@@ -266,7 +293,8 @@ BundleReader::BundleReader(const std::filesystem::path &path) : path_(path)
     std::string line;
     std::uint64_t lineNumber{};
     while (std::getline(metadataFile, line)) {
-        if (line.empty()) continue;
+        if (line.empty())
+            throw Error("HSCAP metadata contains an empty line");
         auto metadata = parseFrameMetadata(internal::json::parse(line));
         if (metadata.frame != lineNumber)
             throw Error("HSCAP metadata frame sequence mismatch");
