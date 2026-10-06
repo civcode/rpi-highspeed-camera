@@ -52,6 +52,15 @@ struct Policy {
     std::uint64_t cropPerformanceDurationMs{5000};
     bool cropPerformanceExact{true};
     std::uint64_t cropPerformanceMaxCases{};
+
+    bool fpsSearchEnabled{};
+    std::int64_t fpsMinFrameDurationUs{100};
+    std::int64_t fpsMaxFrameDurationUs{100000};
+    std::uint64_t fpsShortDurationMs{1500};
+    std::uint64_t fpsFinalDurationMs{10000};
+    std::uint64_t fpsMaxIterations{16};
+    std::uint64_t fpsToleranceUs{2};
+    double fpsAchievedRatio{0.99};
 };
 
 struct TestCase {
@@ -248,6 +257,26 @@ Policy parsePolicy(const Value &root)
         policy.cropPerformanceMaxCases = uintOr(*performance, "max_cases", 0);
         if (const auto *strategy = performance->find("strategy"))
             policy.cropPerformanceStrategy = strategy->asString();
+    }
+
+    if (const auto *fps = root.find("fps_search")) {
+        policy.fpsSearchEnabled = boolOr(*fps, "enabled", false);
+        policy.fpsMinFrameDurationUs = static_cast<std::int64_t>(
+            uintOr(*fps, "min_frame_duration_us", 100));
+        policy.fpsMaxFrameDurationUs = static_cast<std::int64_t>(
+            uintOr(*fps, "max_frame_duration_us", 100000));
+        policy.fpsShortDurationMs = uintOr(*fps, "short_duration_ms", 1500);
+        policy.fpsFinalDurationMs = uintOr(*fps, "final_duration_ms", 10000);
+        policy.fpsMaxIterations = uintOr(*fps, "max_iterations", 16);
+        policy.fpsToleranceUs = uintOr(*fps, "tolerance_us", 2);
+        if (const auto *ratio = fps->find("achieved_ratio"))
+            policy.fpsAchievedRatio = ratio->asNumber();
+
+        if (policy.fpsMinFrameDurationUs <= 0 ||
+            policy.fpsMaxFrameDurationUs < policy.fpsMinFrameDurationUs)
+            throw std::runtime_error("invalid fps_search frame-duration range");
+        if (!(policy.fpsAchievedRatio > 0.0 && policy.fpsAchievedRatio <= 1.0))
+            throw std::runtime_error("fps_search achieved_ratio must be in (0,1]");
     }
     return policy;
 }
@@ -580,6 +609,156 @@ int runIsolated(const fs::path &executable, const fs::path &casePath,
     }
 }
 
+bool probeStable(const Value &result, std::int64_t requestedUs,
+                 double achievedRatio, std::uint64_t toleranceUs)
+{
+    if (result.at("status").asString() != "pass")
+        return false;
+    const auto *stats = result.find("stats");
+    if (!stats || stats->at("measured_fps").isNull())
+        return false;
+
+    const double requestedFps = 1000000.0 / static_cast<double>(requestedUs);
+    if (stats->at("measured_fps").asNumber() < requestedFps * achievedRatio)
+        return false;
+
+    if (const auto *duration = result.find("last_frame_duration_us")) {
+        if (!duration->isNull()) {
+            const auto delivered = duration->asInt64();
+            const auto allowed = requestedUs + static_cast<std::int64_t>(
+                std::max<std::uint64_t>(toleranceUs,
+                    static_cast<std::uint64_t>(requestedUs * (1.0 - achievedRatio))));
+            if (delivered > allowed)
+                return false;
+        }
+    }
+    return true;
+}
+
+Value runProbe(const fs::path &executable, const fs::path &output,
+               const TestCase &base, std::int64_t frameDurationUs,
+               std::uint64_t durationMs, std::uint64_t workerTimeoutMs,
+               bool rerun)
+{
+    TestCase probe = base;
+    probe.frameDurationUs = frameDurationUs;
+    probe.durationMs = durationMs;
+    probe.id = base.id + "-fd-" + std::to_string(frameDurationUs);
+
+    const auto directory = output / "search" / base.id;
+    fs::create_directories(directory);
+    const auto resultPath = directory / (std::to_string(frameDurationUs) + "-" +
+                                          std::to_string(durationMs) + ".json");
+    if (fs::exists(resultPath) && !rerun)
+        return hscam::internal::json::parse(readAll(resultPath));
+
+    const auto casePath = output / "work" / (probe.id + ".json");
+    writeText(casePath, hscam::internal::json::stringify(caseValue(probe), 2) + "\n");
+
+    const auto timeout = std::max<std::uint64_t>(workerTimeoutMs, durationMs + 10000);
+    const int rc = runIsolated(executable, casePath, resultPath, timeout);
+    if (rc == 124) {
+        writeText(resultPath,
+                  hscam::internal::json::stringify(timeoutResult(probe), 2) + "\n");
+    } else if (rc != 0 || !fs::exists(resultPath)) {
+        const Value failure = Value::Object{
+            {"case_id", probe.id},
+            {"status", "worker_error"},
+            {"error", "qualification worker exited with code " + std::to_string(rc)}
+        };
+        writeText(resultPath, hscam::internal::json::stringify(failure, 2) + "\n");
+    }
+    return hscam::internal::json::parse(readAll(resultPath));
+}
+
+Value runFpsSearch(const fs::path &executable, const fs::path &output,
+                   const TestCase &base, const Policy &policy, bool rerun)
+{
+    struct ProbeSummary {
+        std::int64_t durationUs{};
+        bool stable{};
+        double measuredFps{};
+        std::string status;
+    };
+
+    std::vector<ProbeSummary> probes;
+    auto probe = [&](std::int64_t durationUs, std::uint64_t durationMs) {
+        const Value result = runProbe(executable, output, base, durationUs, durationMs,
+                                      policy.workerTimeoutMs, rerun);
+        const bool stable = probeStable(result, durationUs, policy.fpsAchievedRatio,
+                                        policy.fpsToleranceUs);
+        double fps{};
+        if (const auto *stats = result.find("stats")) {
+            if (!stats->at("measured_fps").isNull())
+                fps = stats->at("measured_fps").asNumber();
+        }
+        probes.push_back({durationUs, stable, fps, result.at("status").asString()});
+        return std::pair<Value, bool>{result, stable};
+    };
+
+    auto [slowResult, slowStable] =
+        probe(policy.fpsMaxFrameDurationUs, policy.fpsShortDurationMs);
+
+    Value::Object summary;
+    summary["case_id"] = base.id;
+
+    if (!slowStable) {
+        summary["status"] = "unstable";
+        summary["error"] = "no stable capture at fps_search max_frame_duration_us";
+        summary["best_frame_duration_us"] = nullptr;
+        summary["best_measured_fps"] = nullptr;
+    } else {
+        std::int64_t stableUs = policy.fpsMaxFrameDurationUs;
+        std::int64_t unstableUs = policy.fpsMinFrameDurationUs - 1;
+
+        auto [fastResult, fastStable] =
+            probe(policy.fpsMinFrameDurationUs, policy.fpsShortDurationMs);
+        if (fastStable) {
+            stableUs = policy.fpsMinFrameDurationUs;
+        } else {
+            unstableUs = policy.fpsMinFrameDurationUs;
+            for (std::uint64_t iteration = 0;
+                 iteration < policy.fpsMaxIterations &&
+                 stableUs - unstableUs > static_cast<std::int64_t>(policy.fpsToleranceUs);
+                 ++iteration) {
+                const auto mid = unstableUs + (stableUs - unstableUs) / 2;
+                auto [midResult, midStable] = probe(mid, policy.fpsShortDurationMs);
+                (void)midResult;
+                if (midStable) stableUs = mid;
+                else unstableUs = mid;
+            }
+        }
+
+        auto [finalResult, finalStable] =
+            probe(stableUs, policy.fpsFinalDurationMs);
+
+        summary["status"] = finalStable ? "pass" : "unstable";
+        summary["error"] = finalStable ? Value(nullptr)
+                                        : Value("final validation failed at discovered boundary");
+        summary["best_frame_duration_us"] = stableUs;
+        const auto *finalStats = finalResult.find("stats");
+        if (finalStats && !finalStats->at("measured_fps").isNull()) {
+            summary["best_measured_fps"] = finalStats->at("measured_fps").asNumber();
+            summary["stats"] = *finalStats;
+        } else {
+            summary["best_measured_fps"] = nullptr;
+        }
+        summary["final_result"] = finalResult;
+    }
+
+    Value::Array probeValues;
+    for (const auto &p : probes) {
+        probeValues.emplace_back(Value::Object{
+            {"frame_duration_us", p.durationUs},
+            {"stable", p.stable},
+            {"measured_fps", p.measuredFps ? Value(p.measuredFps) : Value(nullptr)},
+            {"worker_status", p.status}
+        });
+    }
+    summary["probes"] = std::move(probeValues);
+    return Value(std::move(summary));
+}
+
 Value timeoutResult(const TestCase &test)
 {
     return Value::Object{
@@ -718,29 +897,45 @@ int runMain(const fs::path &manifestPath, const fs::path &output,
         const auto resultPath = output / "cases" / (test.id + ".json");
         if (fs::exists(resultPath) && !rerun) {
             ++completed;
-            std::cout << "[" << completed << "/" << cases.size() << "] " << test.id << " resume\n";
+            std::cout << "[" << completed << "/" << cases.size() << "] "
+                      << test.id << " resume\n";
             continue;
         }
 
-        const auto casePath = output / "work" / (test.id + ".json");
-        writeText(casePath, hscam::internal::json::stringify(caseValue(test), 2) + "\n");
+        std::cout << "[" << (completed + 1) << "/" << cases.size() << "] "
+                  << test.id << std::flush;
 
-        std::cout << "[" << (completed + 1) << "/" << cases.size() << "] " << test.id << std::flush;
-        const int rc = runIsolated(executable, casePath, resultPath, policy.workerTimeoutMs);
-        if (rc == 124) {
-            writeText(resultPath, hscam::internal::json::stringify(timeoutResult(test), 2) + "\n");
-            std::cout << " timeout\n";
-        } else if (rc != 0 || !fs::exists(resultPath)) {
-            const Value failure = Value::Object{
-                {"case_id", test.id},
-                {"status", "worker_error"},
-                {"error", "qualification worker exited with code " + std::to_string(rc)}
-            };
-            writeText(resultPath, hscam::internal::json::stringify(failure, 2) + "\n");
-            std::cout << " worker_error\n";
-        } else {
-            const auto result = hscam::internal::json::parse(readAll(resultPath));
+        if (policy.fpsSearchEnabled) {
+            const auto result = runFpsSearch(executable, output, test, policy, rerun);
+            writeText(resultPath,
+                      hscam::internal::json::stringify(result, 2) + "\n");
             std::cout << " " << result.at("status").asString() << "\n";
+        } else {
+            const auto casePath = output / "work" / (test.id + ".json");
+            writeText(casePath,
+                      hscam::internal::json::stringify(caseValue(test), 2) + "\n");
+
+            const int rc = runIsolated(executable, casePath, resultPath,
+                                       policy.workerTimeoutMs);
+            if (rc == 124) {
+                writeText(resultPath,
+                          hscam::internal::json::stringify(timeoutResult(test), 2) + "\n");
+                std::cout << " timeout\n";
+            } else if (rc != 0 || !fs::exists(resultPath)) {
+                const Value failure = Value::Object{
+                    {"case_id", test.id},
+                    {"status", "worker_error"},
+                    {"error", "qualification worker exited with code " +
+                              std::to_string(rc)}
+                };
+                writeText(resultPath,
+                          hscam::internal::json::stringify(failure, 2) + "\n");
+                std::cout << " worker_error\n";
+            } else {
+                const auto result =
+                    hscam::internal::json::parse(readAll(resultPath));
+                std::cout << " " << result.at("status").asString() << "\n";
+            }
         }
         ++completed;
     }
