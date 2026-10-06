@@ -2,9 +2,12 @@
 #include "hscam/error.hpp"
 #include "internal/json.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <sstream>
 
@@ -92,6 +95,7 @@ BundleManifest parseManifest(const Value &root)
     for (const auto &p : stream.at("planes").asArray())
         m.observedPlanes.push_back({static_cast<std::uint32_t>(p.at("stride").asUInt64()),
                                     static_cast<std::uint32_t>(p.at("size").asUInt64())});
+    m.configuration.stream.planes = m.observedPlanes;
 
     const auto &timing = root.at("timing");
     if (!timing.at("requested_frame_duration_us").isNull())
@@ -136,6 +140,70 @@ std::string readAll(const std::filesystem::path &path)
     if (!in) throw Error("failed to open " + path.string());
     std::ostringstream out; out << in.rdbuf(); return out.str();
 }
+
+void writeManifestFile(const std::filesystem::path &directory, const BundleManifest &manifest)
+{
+    const auto destination = directory / "manifest.json";
+    const auto temporary = directory / "manifest.json.tmp";
+
+    {
+        std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
+        if (!out) throw Error("failed to create HSCAP manifest");
+        out << internal::json::stringify(manifestValue(manifest), 2) << '\n';
+        out.flush();
+        if (!out) throw Error("failed to write HSCAP manifest");
+    }
+
+    std::error_code ec;
+    std::filesystem::rename(temporary, destination, ec);
+    if (ec) {
+        std::filesystem::remove(destination, ec);
+        ec.clear();
+        std::filesystem::rename(temporary, destination, ec);
+        if (ec)
+            throw Error("failed to publish HSCAP manifest: " + ec.message());
+    }
+}
+
+struct MetadataScan {
+    std::uint64_t completeLines{};
+    std::uint64_t completeBytes{};
+};
+
+MetadataScan scanMetadata(const std::filesystem::path &path, std::uint64_t maxLines)
+{
+    MetadataScan scan;
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return scan;
+
+    char ch{};
+    std::uint64_t offset{};
+    while (in.get(ch)) {
+        ++offset;
+        if (ch == '\n') {
+            ++scan.completeLines;
+            scan.completeBytes = offset;
+            if (maxLines && scan.completeLines >= maxLines)
+                break;
+        }
+    }
+    return scan;
+}
+
+void appendRecoveredMetadata(std::ostream &out, std::uint64_t frame)
+{
+    Value::Object obj{
+        {"frame", frame},
+        {"sequence", Value(nullptr)},
+        {"request_cookie", Value(nullptr)},
+        {"sensor_timestamp_ns", Value(nullptr)},
+        {"exposure_us", Value(nullptr)},
+        {"frame_duration_us", Value(nullptr)},
+        {"analogue_gain", Value(nullptr)},
+        {"status", "recovered_without_metadata"}
+    };
+    out << internal::json::stringify(Value(std::move(obj))) << '\n';
+}
 }
 
 class BundleWriter::Impl {
@@ -166,9 +234,7 @@ public:
     void writeManifest(bool complete)
     {
         manifest.complete = complete;
-        std::ofstream out(path / "manifest.json", std::ios::trunc);
-        if (!out) throw Error("failed to write HSCAP manifest");
-        out << internal::json::stringify(manifestValue(manifest), 2) << '\n';
+        writeManifestFile(path, manifest);
     }
 
     void closeFiles()
@@ -198,7 +264,11 @@ void BundleWriter::append(const FrameMetadata &metadata, std::span<const PlaneVi
     if (planes.empty()) throw Error("cannot append a frame with zero planes");
 
     if (impl_->manifest.observedPlanes.empty()) {
-        for (const auto &plane : planes) impl_->manifest.observedPlanes.push_back({plane.stride, plane.length});
+        for (const auto &plane : planes)
+            impl_->manifest.observedPlanes.push_back({plane.stride, plane.length});
+        // Persist the actual buffer layout before writing the first payload so
+        // a hard-killed capture can still be reconstructed by recoverBundle().
+        impl_->writeManifest(false);
     } else if (impl_->manifest.observedPlanes.size() != planes.size()) {
         throw Error("HSCAP plane count changed during capture");
     }
@@ -263,6 +333,120 @@ std::vector<std::byte> BundleReader::readFrame(std::uint64_t frameNumber) const
     if (!in.read(reinterpret_cast<char *>(data.data()), static_cast<std::streamsize>(data.size())))
         throw Error("truncated HSCAP payload");
     return data;
+}
+
+BundleRecoveryResult recoverBundle(const std::filesystem::path &path)
+{
+    constexpr std::uint64_t kIndexHeaderBytes = 8;
+    constexpr std::uint64_t kIndexRecordBytes = 32;
+
+    BundleRecoveryResult result;
+    BundleManifest manifest =
+        parseManifest(internal::json::parse(readAll(path / "manifest.json")));
+    result.wasComplete = manifest.complete;
+
+    const auto indexPath = path / "frames.idx";
+    const auto payloadPath = path / "frames.bin";
+    const auto metadataPath = path / "metadata.jsonl";
+
+    std::error_code ec;
+    const auto indexBytes = std::filesystem::file_size(indexPath, ec);
+    if (ec || indexBytes < kIndexHeaderBytes)
+        throw Error("missing or truncated HSCAP index");
+
+    const auto payloadBytes = std::filesystem::file_size(payloadPath, ec);
+    if (ec)
+        throw Error("missing HSCAP payload");
+
+    std::ifstream index(indexPath, std::ios::binary);
+    char magic[8]{};
+    if (!index.read(magic, sizeof(magic)) ||
+        std::memcmp(magic, "HSCIDX01", 8) != 0)
+        throw Error("invalid HSCAP index magic");
+
+    const std::uint64_t completeIndexRecords =
+        (indexBytes - kIndexHeaderBytes) / kIndexRecordBytes;
+    std::uint64_t validRecords{};
+    std::uint64_t expectedPayloadOffset{};
+
+    for (std::uint64_t i = 0; i < completeIndexRecords; ++i) {
+        const auto frame = readU64(index);
+        const auto offset = readU64(index);
+        const auto length = readU64(index);
+        const auto metadataLineNumber = readU64(index);
+
+        if (frame != i || metadataLineNumber != i || offset != expectedPayloadOffset)
+            break;
+        if (length > std::numeric_limits<std::uint64_t>::max() - offset)
+            break;
+        const auto end = offset + length;
+        if (end > payloadBytes)
+            break;
+
+        expectedPayloadOffset = end;
+        ++validRecords;
+    }
+
+    const std::uint64_t repairedIndexBytes =
+        kIndexHeaderBytes + validRecords * kIndexRecordBytes;
+    result.discardedIndexBytes = indexBytes - repairedIndexBytes;
+    result.discardedPayloadBytes = payloadBytes - expectedPayloadOffset;
+    result.recoveredFrames = validRecords;
+
+    const auto metadataOriginalBytes =
+        std::filesystem::exists(metadataPath)
+            ? std::filesystem::file_size(metadataPath, ec)
+            : 0;
+    if (ec) throw Error("failed to inspect HSCAP metadata");
+
+    const auto metadataScan = scanMetadata(metadataPath, validRecords);
+    const std::uint64_t preservedMetadataLines =
+        std::min<std::uint64_t>(metadataScan.completeLines, validRecords);
+    const std::uint64_t preservedMetadataBytes =
+        preservedMetadataLines == validRecords && validRecords != 0
+            ? metadataScan.completeBytes
+            : (preservedMetadataLines ? metadataScan.completeBytes : 0);
+
+    std::filesystem::resize_file(indexPath, repairedIndexBytes, ec);
+    if (ec) throw Error("failed to truncate HSCAP index: " + ec.message());
+
+    std::filesystem::resize_file(payloadPath, expectedPayloadOffset, ec);
+    if (ec) throw Error("failed to truncate HSCAP payload: " + ec.message());
+
+    if (!std::filesystem::exists(metadataPath)) {
+        std::ofstream create(metadataPath, std::ios::binary);
+        if (!create) throw Error("failed to create recovered HSCAP metadata");
+    } else {
+        std::filesystem::resize_file(metadataPath, preservedMetadataBytes, ec);
+        if (ec) throw Error("failed to truncate HSCAP metadata: " + ec.message());
+    }
+
+    if (metadataOriginalBytes > preservedMetadataBytes)
+        result.discardedMetadataBytes = metadataOriginalBytes - preservedMetadataBytes;
+
+    if (preservedMetadataLines < validRecords) {
+        std::ofstream metadata(metadataPath, std::ios::binary | std::ios::app);
+        if (!metadata) throw Error("failed to append recovered HSCAP metadata");
+        for (std::uint64_t frame = preservedMetadataLines; frame < validRecords; ++frame) {
+            appendRecoveredMetadata(metadata, frame);
+            ++result.synthesizedMetadataFrames;
+        }
+        metadata.flush();
+        if (!metadata) throw Error("failed writing recovered HSCAP metadata");
+    }
+
+    const bool unchanged =
+        manifest.complete &&
+        manifest.frameCount == validRecords &&
+        result.discardedIndexBytes == 0 &&
+        result.discardedPayloadBytes == 0 &&
+        result.discardedMetadataBytes == 0 &&
+        result.synthesizedMetadataFrames == 0;
+
+    manifest.frameCount = validRecords;
+    manifest.complete = unchanged;
+    writeManifestFile(path, manifest);
+    return result;
 }
 
 } // namespace hscam
