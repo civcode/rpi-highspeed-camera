@@ -30,6 +30,7 @@ struct BundleRecoveryResult {
     std::uint64_t discardedIndexBytes{};
     std::uint64_t discardedPayloadBytes{};
     std::uint64_t discardedMetadataBytes{};
+    std::uint64_t synthesizedMetadataFrames{};
 };
 
 [[nodiscard]] BundleRecoveryResult recoverBundle(const std::filesystem::path &path);
