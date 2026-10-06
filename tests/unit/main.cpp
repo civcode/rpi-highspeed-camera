@@ -47,6 +47,43 @@ void rawPartialGroups()
     const std::array<std::byte,2> twelve{std::byte{0x12},std::byte{0x03}}; const auto decoded12=raw::decodeRaw(raw12,twelve); require(decoded12.pixels.size()==1&&decoded12.pixels[0]==0x123,"partial RAW12 group");
 }
 
+void yuv420InfersPaddedChromaStride()
+{
+    using namespace hscam;
+
+    BundleManifest inferred;
+    inferred.configuration.stream.size = {4, 4};
+    inferred.configuration.stream.format = {"YUV420"};
+    inferred.observedPlanes = {
+        {8, 32},
+        {0, 8},
+        {0, 8},
+    };
+
+    BundleManifest explicitStride = inferred;
+    explicitStride.observedPlanes[1].stride = 4;
+    explicitStride.observedPlanes[2].stride = 4;
+
+    std::array<std::byte, 48> payload{};
+    // Y plane: neutral luma, with four padding bytes on every row.
+    for (std::size_t y = 0; y < 4; ++y)
+        for (std::size_t x = 0; x < 4; ++x)
+            payload[y * 8 + x] = std::byte{128};
+
+    // U plane starts at 32. Row 0 is neutral; row 1 is strongly blue.
+    payload[32] = payload[33] = std::byte{128};
+    payload[36] = payload[37] = std::byte{255};
+    // V plane starts at 40 and stays neutral.
+    payload[40] = payload[41] = std::byte{128};
+    payload[44] = payload[45] = std::byte{128};
+
+    const auto inferredImage = raw::renderPreview(inferred, payload);
+    const auto explicitImage = raw::renderPreview(explicitStride, payload);
+
+    require(inferredImage.pixels == explicitImage.pixels,
+            "YUV420 unknown chroma stride must follow padded luma stride");
+}
+
 void bundleRejectsTrailingPayload()
 {
     using namespace hscam;
@@ -129,4 +166,4 @@ void bundleRoundTrip()
 }
 }
 
-int main(){try{geometryAndModeIds();raw10Unpack();raw12Unpack();rawPartialGroups();bundleRejectsTrailingPayload();bundleRecovery();bundleRoundTrip();std::cout<<"hscam unit tests passed\n";return 0;}catch(const std::exception&e){std::cerr<<"unit test failed: "<<e.what()<<'\n';return 1;}}
+int main(){try{geometryAndModeIds();raw10Unpack();raw12Unpack();rawPartialGroups();yuv420InfersPaddedChromaStride();bundleRejectsTrailingPayload();bundleRecovery();bundleRoundTrip();std::cout<<"hscam unit tests passed\n";return 0;}catch(const std::exception&e){std::cerr<<"unit test failed: "<<e.what()<<'\n';return 1;}}
