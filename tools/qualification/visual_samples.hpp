@@ -2,6 +2,7 @@
 
 #include "hscam/capture_bundle.hpp"
 #include "hscam/context.hpp"
+#include "hscam/error.hpp"
 #include "hscam/raw/render.hpp"
 #include "internal/json.hpp"
 
