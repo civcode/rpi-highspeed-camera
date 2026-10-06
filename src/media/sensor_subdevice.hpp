@@ -45,6 +45,7 @@ public:
 private:
     SensorSubdevice(int fd, SensorSubdeviceInfo info);
     CropProbe setSelection(Rect requested, std::uint32_t which) const;
+    void setFormatSize(Size size, std::uint32_t which) const;
 
     int fd_{-1};
     SensorSubdeviceInfo info_;
