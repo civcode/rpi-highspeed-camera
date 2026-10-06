@@ -2,6 +2,7 @@
 
 #include "hscam/camera.hpp"
 #include "hscam/camera_info.hpp"
+#include "hscam/error.hpp"
 #include "internal/json.hpp"
 
 #include <algorithm>
