@@ -39,6 +39,12 @@ struct SensorConfiguration {
     std::optional<Rect> crop;
 };
 
+struct CropNegotiation {
+    Rect requested;
+    Rect negotiated;
+    bool exact{};
+};
+
 struct TimingConfiguration {
     std::optional<std::chrono::microseconds> requestedFrameDuration;
     std::optional<std::chrono::microseconds> negotiatedFrameDuration;
