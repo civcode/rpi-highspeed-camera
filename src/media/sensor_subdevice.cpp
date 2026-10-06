@@ -174,6 +174,7 @@ CropProbe SensorSubdevice::setSelection(Rect requested, std::uint32_t which) con
 
 CropProbe SensorSubdevice::tryCrop(Rect requested) const
 {
+    setFormatSize(requested.size(), V4L2_SUBDEV_FORMAT_TRY);
     return setSelection(requested, V4L2_SUBDEV_FORMAT_TRY);
 }
 
@@ -184,12 +185,12 @@ CropProbe SensorSubdevice::setCrop(Rect requested)
     return result;
 }
 
-void SensorSubdevice::setFormatSize(Size size)
+void SensorSubdevice::setFormatSize(Size size, std::uint32_t which) const
 {
     if (fd_ < 0)
         throw Unsupported("sensor subdevice is not open");
     v4l2_subdev_format format{};
-    format.which = V4L2_SUBDEV_FORMAT_ACTIVE;
+    format.which = which;
     format.pad = info_.pad;
     if (::ioctl(fd_, VIDIOC_SUBDEV_G_FMT, &format) < 0)
         throw Unsupported("VIDIOC_SUBDEV_G_FMT failed for " + info_.deviceNode + ": " + std::strerror(errno));
@@ -197,6 +198,11 @@ void SensorSubdevice::setFormatSize(Size size)
     format.format.height = size.height;
     if (::ioctl(fd_, VIDIOC_SUBDEV_S_FMT, &format) < 0)
         throw Unsupported("VIDIOC_SUBDEV_S_FMT failed for " + info_.deviceNode + ": " + std::strerror(errno));
+}
+
+void SensorSubdevice::setFormatSize(Size size)
+{
+    setFormatSize(size, V4L2_SUBDEV_FORMAT_ACTIVE);
 }
 
 } // namespace hscam::media
