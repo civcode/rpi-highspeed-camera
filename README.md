@@ -254,6 +254,16 @@ cases, verifies visual files, retains case/search/crop-probe audit data, and
 omits only the large raw `.hscap` sample bundles. Full promotion rules live in
 [qualification/results/README.md](qualification/results/README.md).
 
+After promoting runs, check Phase 10 completeness with:
+
+```bash
+build/hscam-qualify audit-results \
+  --results-root qualification/results
+```
+
+The audit requires each official v1 sensor family to be represented by a valid
+promotion or an explicit reviewable `blocked.json` record.
+
 ## Design documents
 
 - [v0.1 implementation roadmap](docs/v0.1-implementation-roadmap.md)
