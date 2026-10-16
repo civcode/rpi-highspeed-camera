@@ -147,6 +147,13 @@ Each planned case records:
 
 `stream_kind` is `raw` or `processed`.
 
+Raw advertised-mode cases optionally include `raw_representation` (`auto`,
+`uncompressed` or `compressed`), `raw_format` (the explicitly requested
+libcamera Bayer pixel-format name), and `raw_sample_alignment`. These
+properties come from the campaign's optional `raw_capture` manifest block
+and are frozen into the case ID and worker input. Both FPS measurements and
+subsequent HSCAP visual evidence use the same request.
+
 The processed path is significant for experimental sensor crops: it permits qualification of the sensor-level crop without requiring a secondary raw stream that could force a different pipeline configuration.
 
 ## environment.json / environment_end.json
@@ -255,6 +262,14 @@ A direct capture case normally includes:
 ```
 
 Values are illustrative.
+
+The `configuration.stream` object additionally reports
+`requested_pixel_format`, `representation` (the **negotiated** encoding
+class), `data_bits`, `storage_bits`, `sample_alignment` and `stride`
+alongside the existing negotiated `pixel_format`. A Pi 5 OV5647 request for
+`SBGGR10` may produce `SGBRG16` with 10 effective sensor bits in a
+16-bit storage container. Do not interpret `GBRG_PISP_COMP1` as an unpacked
+Bayer frame; COMP1 is not yet supported by the image exporter.
 
 ### Status interpretation
 
@@ -379,7 +394,7 @@ The runner attempts to preserve:
 
 The sample capture reproduces the qualified stream kind, mode/crop and discovered frame duration.
 
-PNG/DNG/video files are derived evidence. The corresponding qualification JSON remains authoritative for FPS/drop claims.
+PNG/DNG/video files are derived evidence. The corresponding qualification JSON remains authoritative for FPS/drop claims. Visual sample receipts now include the negotiated RAW format, requested format, representation, sensor/storage bit depths, and alignment. The runner warms up automatic exposure and rejects obviously black/near-constant PNG evidence, but a human must still verify representative images for Bayer order and brightness.
 
 ## campaign_status.json
 
