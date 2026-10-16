@@ -80,6 +80,7 @@ struct TestCase {
     std::string id;
     std::string cameraId;
     std::optional<std::string> modeId;
+    std::optional<hscam::Size> expectedModeSize;
     std::optional<hscam::Rect> crop;
     std::optional<std::int64_t> frameDurationUs;
     hscam::StreamKind streamKind{hscam::StreamKind::Raw};
@@ -359,6 +360,8 @@ Value caseValue(const TestCase &test)
         {"case_id", test.id},
         {"camera_id", test.cameraId},
         {"mode_id", test.modeId ? Value(*test.modeId) : Value(nullptr)},
+        {"mode_width", test.expectedModeSize ? Value(static_cast<std::uint64_t>(test.expectedModeSize->width)) : Value(nullptr)},
+        {"mode_height", test.expectedModeSize ? Value(static_cast<std::uint64_t>(test.expectedModeSize->height)) : Value(nullptr)},
         {"crop", rectValue(test.crop)},
         {"frame_duration_us", test.frameDurationUs ? Value(*test.frameDurationUs) : Value(nullptr)},
         {"stream_kind", test.streamKind == hscam::StreamKind::Raw ? "raw" : "processed"},
@@ -383,6 +386,13 @@ TestCase parseCase(const Value &root)
     test.id = root.at("case_id").asString();
     test.cameraId = root.at("camera_id").asString();
     if (!root.at("mode_id").isNull()) test.modeId = root.at("mode_id").asString();
+    if (const auto *w = root.find("mode_width"); w && !w->isNull()) {
+        const auto *h = root.find("mode_height");
+        if (!h || h->isNull()) throw std::runtime_error("case mode_height is missing");
+        test.expectedModeSize = hscam::Size{
+            static_cast<std::uint32_t>(w->asUInt64()),
+            static_cast<std::uint32_t>(h->asUInt64())};
+    }
     test.crop = parseRect(root.at("crop"));
     if (!root.at("frame_duration_us").isNull()) test.frameDurationUs = root.at("frame_duration_us").asInt64();
     if (const auto *kind = root.find("stream_kind")) {
@@ -649,24 +659,13 @@ int workerMain(const fs::path &casePath, const fs::path &resultPath)
 
         const auto configuration = camera.configure(request);
         hscam::qualification::verifyRawCaptureSelection(request, configuration, false);
-        // A mode benchmark must not silently time a different sensor/readout
-        // size just because libcamera's negotiation policy allowed adjustments.
-        if (test.modeId) {
-            const auto cameras = context.cameras();
-            const auto foundCamera = std::find_if(cameras.begin(), cameras.end(),
-                [&](const hscam::CameraInfo &info) { return info.id == test.cameraId; });
-            if (foundCamera == cameras.end())
-                throw hscam::NegotiationFailed("camera disappeared during qualification");
-            const auto foundMode = std::find_if(foundCamera->sensorModes.begin(),
-                foundCamera->sensorModes.end(),
-                [&](const hscam::SensorMode &mode) { return mode.id == *test.modeId; });
-            if (foundMode == foundCamera->sensorModes.end())
-                throw hscam::NegotiationFailed("requested sensor mode disappeared during qualification");
-            if (configuration.stream.size.width != foundMode->size.width ||
-                configuration.stream.size.height != foundMode->size.height)
-                throw hscam::NegotiationFailed(
-                    "advertised sensor mode negotiated an unexpected stream size");
-        }
+        // Classify only the mode actually requested, never an adjusted
+        // resolution returned by libcamera's permissive negotiation policy.
+        if (test.expectedModeSize &&
+            (configuration.stream.size.width != test.expectedModeSize->width ||
+             configuration.stream.size.height != test.expectedModeSize->height))
+            throw hscam::NegotiationFailed(
+                "advertised sensor mode negotiated an unexpected stream size");
         result["configuration"] = captureConfigurationValue(configuration);
 
         auto session = camera.start();
@@ -803,6 +802,7 @@ std::vector<TestCase> buildCases(const Policy &policy, const hscam::CameraInfo &
             TestCase test;
             test.cameraId = camera.id;
             test.modeId = mode.id;
+            test.expectedModeSize = mode.size;
             test.streamKind = hscam::StreamKind::Raw;
             test.rawCapture = policy.rawCapture;
             test.durationMs = policy.advertisedDurationMs;
