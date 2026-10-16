@@ -163,6 +163,17 @@ install(
 if(HSCAM_BUILD_TESTS)
     enable_testing()
 
+    # Sensor-driver source transformation is host-testable without a Pi or
+    # Linux headers. Never load/build a kernel module from CTest.
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+        add_test(
+            NAME hscam-ov5647-patch-tests
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/kernel/tests/test_ov5647_patcher.py
+        )
+    endif()
+
     add_executable(hscam-unit-tests tests/unit/main.cpp)
     target_include_directories(hscam-unit-tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/tools/qualification
