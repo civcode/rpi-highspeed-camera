@@ -283,6 +283,16 @@ The important status classes are:
 - `timeout`: the isolated worker exceeded its hard timeout;
 - `worker_error`: the worker process failed without producing a normal result.
 
+Each completed worker result also records `stability_failures` as an array of
+concrete in-capture issues, for example `sequence_gaps`,
+`queue_overruns`, `requests_cancelled_during_capture`,
+`no_frames_consumed` or `incomplete_frames`. An empty array means its
+capture-health gate passed. The worker snapshots statistics **before**
+deliberately stopping the camera: libcamera can cancel queued requests as
+part of normal `Camera::stop()`, and shutdown-induced cancellations are not
+dropped sensor frames. The separate FPS-search gate additionally checks the
+measured FPS, delivered frame duration and maximum timestamp interval.
+
 A non-pass experimental result triggers a known-good camera recovery capture. If that recovery fails, the campaign aborts and writes `recovery_failure.json`.
 
 ### Per-frame timing trace
