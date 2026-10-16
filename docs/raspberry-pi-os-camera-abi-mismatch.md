@@ -1,5 +1,9 @@
 # Raspberry Pi OS camera-stack ABI mismatch on a new Pi 5 installation
 
+> **Historical field report, not high-FPS experimental evidence.**
+> Still useful for diagnosing libcamera mismatches during kernel-driver
+> experimentation. See [current project goals](project-goals.md).
+
 > **Field report — 16 October 2026.** Reproduced on a Raspberry Pi 5 running
 > Raspberry Pi OS Trixie (arm64), using the Raspberry Pi package repository.
 > **Resolved for this installation** by updating the `rpicam-apps` application
