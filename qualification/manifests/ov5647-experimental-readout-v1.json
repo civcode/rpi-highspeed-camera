@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "campaign": "ov5647-experimental-readout-v1",
+  "worker_timeout_ms": 45000,
+  "require_zero_drops": true,
+  "raw_capture": {
+    "representation": "uncompressed",
+    "format": "SBGGR10"
+  },
+  "advertised_modes": {
+    "enabled": true,
+    "duration_ms": 1500
+  },
+  "experimental_readouts": [
+    {"width": 640, "height": 240},
+    {"width": 640, "height": 128},
+    {"width": 640, "height": 64},
+    {"width": 640, "height": 32}
+  ],
+  "crop_geometry": {
+    "enabled": false
+  },
+  "crop_performance": {
+    "enabled": false
+  },
+  "explicit_crops": {
+    "enabled": false,
+    "crops": []
+  },
+  "fps_search": {
+    "enabled": true,
+    "min_frame_duration_us": 1000,
+    "max_frame_duration_us": 100000,
+    "short_duration_ms": 1500,
+    "final_duration_ms": 10000,
+    "max_iterations": 12,
+    "tolerance_us": 20,
+    "achieved_ratio": 0.99,
+    "max_interval_ratio": 1.5
+  },
+  "environment": {
+    "require_no_throttling": true
+  },
+  "visual_samples": {
+    "enabled": true,
+    "fastest_frame_count": 64,
+    "playback_fps": 30
+  }
+}
