@@ -23,6 +23,61 @@ camera capture. Export/backup the boot configuration separately.
 write registers, build a module or modify the boot partition. It checks
 what is currently bound and what compiler/kernel version must be targeted.
 
+## Pinned Pi 5 / OV5647 environment (2026-10-16)
+
+The actual development Pi reported:
+
+| Property | Value |
+| --- | --- |
+| Board | Raspberry Pi 5 Rev 1.1, ARM64 |
+| Running kernel | `6.18.50+rpt-rpi-2712` |
+| Debian/Raspberry Pi kernel package | `6.18.50-1+rpt1` |
+| libcamera | `0.7.2` |
+| Kernel I²C driver | `ov5647`, bound to `10-0036` |
+| V4L2 sensor subdevice | `/dev/v4l-subdev2` |
+
+**Pinned kernel source is essential:** the moving `rpi-6.18.y` branch
+may no longer correspond to this packaged binary. The Raspberry Pi package
+archive lists `linux-source-6.18` **version `6.18.50-1+rpt1`**.
+
+Run this **non-root** command from the project checkout to fetch and
+unpack the matching Debian-patched Linux source and record a SHA256 of
+the stock OV5647 driver:
+
+```bash
+bash kernel/tools/prepare-ov5647-source.sh
+```
+
+This verifies the running kernel release and fails if the exact matching
+source package isn't available from the configured apt indexes. It
+downloads approximately 150 MB of source; it **does not install a kernel**.
+It creates files under `kernel/work/`, which should be excluded from Git.
+
+The next review step is to compare the installed kernel build configuration
+and driver source before modifying an experimental mode table:
+
+```bash
+dpkg-query -W 'linux-image-6.18.50+rpt-rpi-2712' 2>/dev/null || true
+modinfo ov5647 2>/dev/null | head -25 || true
+media-ctl -p -d /dev/media0
+v4l2-ctl -d /dev/v4l-subdev2 --all
+```
+
+Media-controller numbering is dynamic: select the `/dev/mediaN` containing
+`ov5647 10-0036`, not necessarily `/dev/media0`. These queries are
+read-only and do not activate experimental capture. Preserve boot
+configuration details, especially `kernel=`, `auto_initramfs` and active
+camera overlays before trial installations.
+
+Building and booting an alternate kernel is a **separate, explicit step**.
+Raspberry Pi's current kernel documentation warns that `auto_initramfs`
+pairs initramfs filenames with selected custom kernel filenames; ensure
+the boot initramfs and module tree match or the system may not boot.
+
+Sources:
+- https://archive.raspberrypi.com/debian/pool/main/l/linux/
+- https://www.raspberrypi.com/documentation/computers/linux_kernel.html
+
 ## First OV5647 experimental driver milestone
 
 The first actual patch must be based on the **matching** running Raspberry
