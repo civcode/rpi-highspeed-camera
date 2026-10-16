@@ -1,4 +1,5 @@
 #include "hscam/context.hpp"
+#include "hscam/highspeed.hpp"
 #include "hscam/error.hpp"
 #include "hscam/version.hpp"
 #include "internal/json.hpp"
@@ -47,6 +48,7 @@ struct Policy {
     hscam::qualification::RawCaptureSelection rawCapture;
     bool advertisedEnabled{true};
     std::uint64_t advertisedDurationMs{3000};
+    std::vector<hscam::Size> experimentalReadouts; // fail-closed exact sensor mode sizes
     bool cropsEnabled{};
     std::uint64_t cropDurationMs{3000};
     bool cropsExact{true};
@@ -283,6 +285,27 @@ Policy parsePolicy(const Value &root)
     if (const auto *advertised = root.find("advertised_modes")) {
         policy.advertisedEnabled = boolOr(*advertised, "enabled", true);
         policy.advertisedDurationMs = uintOr(*advertised, "duration_ms", 3000);
+    }
+
+    if (const auto *experimental = root.find("experimental_readouts")) {
+        for (const auto &entry : experimental->asArray()) {
+            const auto width = entry.at("width").asUInt64();
+            const auto height = entry.at("height").asUInt64();
+            if (width == 0 || height == 0 ||
+                width > std::numeric_limits<std::uint32_t>::max() ||
+                height > std::numeric_limits<std::uint32_t>::max())
+                throw std::runtime_error("experimental_readouts requires valid positive dimensions");
+            const hscam::Size size{static_cast<std::uint32_t>(width),
+                                   static_cast<std::uint32_t>(height)};
+            if (std::find(policy.experimentalReadouts.begin(),
+                          policy.experimentalReadouts.end(), size) ==
+                policy.experimentalReadouts.end())
+                policy.experimentalReadouts.push_back(size);
+        }
+        if (policy.experimentalReadouts.empty())
+            throw std::runtime_error("experimental_readouts may not be empty");
+        if (!policy.advertisedEnabled)
+            throw std::runtime_error("experimental_readouts requires advertised_modes.enabled=true");
     }
 
     if (const auto *crops = root.find("explicit_crops")) {
@@ -815,7 +838,15 @@ std::vector<TestCase> buildCases(const Policy &policy, const hscam::CameraInfo &
     };
 
     if (policy.advertisedEnabled) {
-        for (const auto &mode : camera.sensorModes) {
+        const auto selectedModes = policy.experimentalReadouts.empty()
+            ? camera.sensorModes
+            : hscam::matchExperimentalReadouts(camera, policy.experimentalReadouts);
+        if (!policy.experimentalReadouts.empty() && selectedModes.empty())
+            throw std::runtime_error(
+                "no exact experimental sensor readout modes are exposed by the "
+                "running driver; install an opt-in experimental driver first "
+                "and verify V4L2/libcamera mode enumeration");
+        for (const auto &mode : selectedModes) {
             TestCase test;
             test.cameraId = camera.id;
             test.modeId = mode.id;
@@ -825,14 +856,16 @@ std::vector<TestCase> buildCases(const Policy &policy, const hscam::CameraInfo &
             test.durationMs = policy.advertisedDurationMs;
             test.exact = false;
             test.requireZeroDrops = policy.requireZeroDrops;
-            test.id = "mode-" + testCaseKey(test);
+            test.id = (policy.experimentalReadouts.empty() ? "mode-" : "experiment-mode-") +
+                      testCaseKey(test);
             cases.push_back(std::move(test));
         }
 
         // Some libcamera cameras may expose processed capture without an
         // application-visible raw mode. They still need a baseline campaign
         // case instead of silently producing an empty qualification plan.
-        if (camera.sensorModes.empty() && camera.capabilities.processedCapture) {
+        if (policy.experimentalReadouts.empty() &&
+            camera.sensorModes.empty() && camera.capabilities.processedCapture) {
             TestCase test;
             test.cameraId = camera.id;
             test.streamKind = hscam::StreamKind::Processed;
@@ -1761,6 +1794,9 @@ int runMain(const fs::path &manifestPath, const fs::path &output,
     }
 
     auto cases = buildCases(policy, camera, geometry ? &*geometry : nullptr);
+    if (cases.empty())
+        throw std::runtime_error("qualification plan contains no cases; "
+                                 "no experimental hardware has been verified");
     Value::Array casePlan;
     for (const auto &test : cases) casePlan.push_back(caseValue(test));
     const Value plan = Value::Object{
