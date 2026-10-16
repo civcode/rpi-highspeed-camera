@@ -36,6 +36,7 @@ const char *highspeedStrategyName(HighspeedStrategy strategy) noexcept
 {
     switch (strategy) {
     case HighspeedStrategy::NativeSensorRoi: return "native_sensor_roi";
+    case HighspeedStrategy::ExperimentalModesAdvertised: return "experimental_modes_advertised";
     case HighspeedStrategy::DriverExtensionRequired: return "driver_extension_required";
     case HighspeedStrategy::Uncharacterized: return "uncharacterized";
     }
@@ -55,13 +56,6 @@ HighspeedAssessment assessHighspeed(const CameraInfo &camera)
         camera.capabilities.sensorCropTryable &&
         camera.capabilities.sensorCropSettable;
 
-    if (result.nativeRoiAdvertised) {
-        result.strategy = HighspeedStrategy::NativeSensorRoi;
-    } else if (result.officialSensor) {
-        result.strategy = HighspeedStrategy::DriverExtensionRequired;
-        result.requiresDriverExtension = true;
-    }
-
     // Historical/reference sizes, not automatically selected kernel modes.
     // No FPS value is embedded: every claim requires an actual capture trace.
     if (sensor == "ov5647") {
@@ -70,6 +64,24 @@ HighspeedAssessment assessHighspeed(const CameraInfo &camera)
     } else if (sensor == "imx296") {
         result.referenceReadouts.push_back({{1456U, 96U}, "GScrop historical profile"});
         result.referenceReadouts.push_back({{688U, 136U}, "GScrop historical profile"});
+    }
+
+    std::vector<Size> candidateSizes;
+    for (const auto &candidate : result.referenceReadouts)
+        candidateSizes.push_back(candidate.size);
+    result.referenceModesAdvertised =
+        !candidateSizes.empty() &&
+        !matchExperimentalReadouts(camera, candidateSizes).empty();
+
+    if (result.nativeRoiAdvertised) {
+        result.strategy = HighspeedStrategy::NativeSensorRoi;
+    } else if (result.referenceModesAdvertised) {
+        // Sensor-sized mode exists; still not independent proof of a
+        // custom driver, correct CSI readout or high FPS.
+        result.strategy = HighspeedStrategy::ExperimentalModesAdvertised;
+    } else if (result.officialSensor) {
+        result.strategy = HighspeedStrategy::DriverExtensionRequired;
+        result.requiresDriverExtension = true;
     }
     return result;
 }
