@@ -4,6 +4,7 @@
 #include "hscam/geometry.hpp"
 #include "hscam/raw/render.hpp"
 #include "raw_capture.hpp"
+#include "fps_search.hpp"
 
 #include <algorithm>
 #include <array>
@@ -458,4 +459,62 @@ void qualificationRawSelection()
     verifyRawCaptureSelection(request, config, true);
 }
 
-int main(){try{geometryAndModeIds();raw10Unpack();raw12Unpack();rawPartialGroups();rawFormatAndRenderCoverage();yuv420InfersPaddedChromaStride();bundleRejectsTrailingPayload();bundleRecovery();bundleRoundTrip();bayer16ContainerDecode();manifestRawMetadataRoundTrip();rawEncodingClassification();manifestRawValidation();qualificationRawSelection();std::cout<<"hscam unit tests passed\n";return 0;}catch(const std::exception&e){std::cerr<<"unit test failed: "<<e.what()<<'\n';return 1;}}
+
+void qualificationFpsSearch()
+{
+    using hscam::qualification::assessFpsProbe;
+    using hscam::qualification::fpsFinalCandidates;
+    using hscam::internal::json::Value;
+
+    auto measurement = [](double fps, std::int64_t maximumIntervalNs,
+                          std::int64_t deliveredDurationUs) {
+        return Value::Object{
+            {"status", "pass"},
+            {"stats", Value::Object{
+                {"measured_fps", fps},
+                {"max_interval_ns", maximumIntervalNs}
+            }},
+            {"last_frame_duration_us", deliveredDurationUs}
+        };
+    };
+    constexpr std::int64_t requestedUs = 34440;
+    constexpr double ratio = 0.99;
+
+    // The measured 28.84 FPS meets 99% of the requested 29.04 FPS.
+    auto healthy = measurement(28.839924343, 50000000, 34420);
+    const auto stable = assessFpsProbe(healthy, requestedUs, ratio, 25, 1.5);
+    require(stable.stable(), "close-to-limit FPS may pass the average FPS gate");
+
+    // A longer validation can expose a single skipped/jittery interval,
+    // although the capture-health worker itself reports status 'pass'.
+    const auto delayed = assessFpsProbe(
+        measurement(28.839924343, 52000000, 34420), requestedUs, ratio, 25, 1.5);
+    require(!delayed.stable() &&
+            std::find(delayed.reasons.begin(), delayed.reasons.end(),
+                      "max_interval_exceeded") != delayed.reasons.end(),
+            "maximum timestamp gap must be diagnosed separately");
+
+    const auto tooSlow = assessFpsProbe(
+        measurement(27.0, 45000000, 34420), requestedUs, ratio, 25, 1.5);
+    require(!tooSlow.stable() &&
+            std::find(tooSlow.reasons.begin(), tooSlow.reasons.end(),
+                      "measured_fps_below_minimum") != tooSlow.reasons.end(),
+            "insufficient average FPS should have explicit rejection reason");
+
+    const auto delivered = assessFpsProbe(
+        measurement(29.03, 45000000, 35000), requestedUs, ratio, 25, 1.5);
+    require(!delivered.stable() &&
+            std::find(delivered.reasons.begin(), delivered.reasons.end(),
+                      "delivered_frame_duration_exceeded") != delivered.reasons.end(),
+            "negotiated frame duration should be checked separately");
+
+    const std::vector<std::pair<std::int64_t, bool>> shortProbes{
+        {100000, true}, {34440, true}, {32879, false},
+        {37562, true}, {34440, true}, {25075, false}
+    };
+    const auto candidates = fpsFinalCandidates(shortProbes);
+    require(candidates == std::vector<std::int64_t>{34440, 37562, 100000},
+            "full-length validation retries slower short-stable candidates");
+}
+
+int main(){try{geometryAndModeIds();raw10Unpack();raw12Unpack();rawPartialGroups();rawFormatAndRenderCoverage();yuv420InfersPaddedChromaStride();bundleRejectsTrailingPayload();bundleRecovery();bundleRoundTrip();bayer16ContainerDecode();manifestRawMetadataRoundTrip();rawEncodingClassification();manifestRawValidation();qualificationRawSelection();qualificationFpsSearch();std::cout<<"hscam unit tests passed\n";return 0;}catch(const std::exception&e){std::cerr<<"unit test failed: "<<e.what()<<'\n';return 1;}}
