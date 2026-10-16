@@ -17,7 +17,7 @@ and at least one experimentally characterized path **where physically possible**
 | Phase | Deliverables | Acceptance gate | Status |
 | --- | --- | --- | --- |
 | H0 — Recharter | Canonical goals, source/doc audit, historical docs marked | No current document misstates the research goal | Implemented in repository |
-| H1 — Strategy API | Public C++ experiment strategy/target types; all official sensors identified; host tests | Six model classification fixtures pass without camera or false FPS claims | Implemented in repository; host execution pending |
+| H1 — Strategy API | Public C++ experiment strategy/target types; all official sensors identified; host tests | Six model classification fixtures pass without camera or false FPS claims | Implemented; standalone C++20 host smoke passed, full repository CTest pending |
 | H2 — Discover CLI | Separate `hscam-highspeed` dry-run inventory; JSON/human; no register writes | Works on no-camera host gracefully, identifies current driver limitations on Pi | Implemented in repository; Pi execution pending |
 | H3 — Experimental-only tests | Exact candidate-size matching and fail-closed manifest; no normal-mode fallback | Stock OV5647 finds zero experimental modes, never mislabels baseline | Implemented in repository; Pi execution pending |
 | H4 — Kernel development safety | Documented kernel branch, reproducible local patch/build/rollback procedure, driver binding rules | Alternate kernel can be selected and restored on test Pi | Procedure implemented; **hardware gate open** |
