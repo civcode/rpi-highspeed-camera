@@ -1,5 +1,10 @@
 # Raw visualization and export concept
 
+> **Current role:** unchanged offline evidence format for experimental
+> sensor-driver campaigns. Correct PNG/DNG/video output helps check Bayer order
+> and geometry but cannot itself establish FPS or actual sensor cropping.
+> See [active roadmap](experimental-high-fps-roadmap.md).
+
 ## Purpose
 
 The core capture library must remain timing-clean and raw-first, but the project also needs a deterministic way to verify that captured data represents a real, correctly oriented image and to turn high-speed captures into viewable still images and slow-motion video.
@@ -625,7 +630,9 @@ For v0.1, **offline preview is sufficient**.
 
 # 16. Verification artifacts for the official-camera campaign
 
-The one-time official Raspberry Pi camera qualification should preserve enough imagery for human review without committing enormous raw datasets.
+Each experimental high-FPS sensor-readout qualification must preserve enough
+imagery for human review without committing enormous raw datasets; an
+ordinary full-frame image alone does not prove reduced-height readout.
 
 For every camera, preserve at least:
 
