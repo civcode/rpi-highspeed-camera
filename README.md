@@ -1,12 +1,53 @@
 # rpi-highspeed-camera
 
-A C++ capture and qualification toolkit for exploring the real high-frame-rate limits of Raspberry Pi cameras.
+**Experimental high-FPS sensor readout for Raspberry Pi cameras.**
 
-The project is built around the modern **libcamera + Linux media/V4L2** stack. It does not hard-code one camera model as the architecture: advertised sensor modes are discovered through libcamera, and mutable sensor crops are detected and negotiated through the sensor subdevice where the driver exposes them.
+The goal is to reproduce—and systematically extend—the sensor-register
+and reduced-height readout techniques demonstrated by historical `raspiraw`
+scripts, using a clean **C++20 capture/qualification library** and optional
+**Linux V4L2 sensor-driver extensions**. It targets all six official Raspberry
+Pi camera families with **sensor-specific strategies**, not a claim that
+every sensor supports the same ROI or frame rate.
 
-The IMX296 Global Shutter Camera is the reference high-FPS case because published experiments have demonstrated sensor-level cropped capture above 500 fps. Other cameras are handled according to the capabilities their current drivers actually expose.
+Ordinary documented/advertised modes are baseline regression tests only.
+The primary goal is **real sensor readout hacks**: smaller sensor windows,
+row skipping/binning, clock/blanking changes and measured maximum stable FPS.
+Image resizing or libcamera `ScalerCrop` must never be reported as proof.
 
-## Current v0.1 implementation
+The running Linux sensor driver owns I²C control. The C++ library uses
+libcamera and V4L2, while experimental kernel drivers (written in C)
+can expose new, coherent sensor modes. Only one driver binds a sensor at
+a time; changes must be opt-in with a stock-kernel rollback.
+
+**Design:** [Project goals](docs/project-goals.md) |
+[Active development roadmap](docs/experimental-high-fps-roadmap.md) |
+[Kernel-driver integration](docs/kernel-driver-integration.md).
+
+## Experimental discovery and safe campaign
+
+```bash
+# Reports strategy, reference readouts and unmet kernel requirements.
+# No camera registers are modified by this command.
+build/hscam-highspeed --json
+
+# Run ONLY on a Pi whose modified OV5647 driver advertises one or more
+# genuine reduced-height modes; stock drivers fail closed with a clear error.
+build/hscam-qualify run \
+  qualification/manifests/ov5647-experimental-readout-v1.json \
+  --output qualification/work/ov5647-experimental
+```
+
+The experimental manifest requests exact 640×240/128/64/32 readout
+dimensions; it will **not** silently switch to normal 640×480 capture.
+These are historical research candidates, not verified FPS results on Pi 5.
+
+The kernel driver for these readouts is **not implemented yet**.
+The strategy API, read-only discovery command and fail-closed planner
+are software foundations; the driver must still be ported, built and
+measured on hardware. See milestones H5–H9 in the active roadmap.
+
+## Existing capture and baseline tooling (v0.1 lineage)
+
 
 The repository currently contains:
 
@@ -17,7 +58,10 @@ The repository currently contains:
 - `hscam-qualify`: manifest-driven, resumable hardware qualification with crop discovery and maximum-stable-FPS search;
 - the version-controlled official-camera qualification manifest.
 
-The Pi-specific capture backend still needs to be compiled and exercised on real Raspberry Pi hardware before the first qualification data is considered authoritative. Host-side raw/HSCAP algorithms are covered by unit tests, but this repository does not claim hardware results until those runs are published.
+The OV5647 baseline RAW→HSCAP→PNG path has been exercised on Pi 5,
+and preliminary fixed-mode FPS pilots were run. These are **not**
+evidence of the new experimental reduced-height driver modes.
+The official six-camera experimental dataset is still pending.
 
 ## Build on Raspberry Pi OS
 
@@ -172,7 +216,7 @@ build/hscam-export video cropped.hscap \
 
 Rendering is deliberately offline by default. Image processing and encoding therefore cannot make a high-FPS timing test pass or fail.
 
-## Official-camera qualification campaign
+## Legacy official-camera baseline qualification
 
 The canonical campaign definition is:
 
@@ -297,6 +341,9 @@ promotion or an explicit reviewable `blocked.json` record.
 - [qualification results v1](docs/qualification-results-v1.md)
 - [C++ library first implementation](docs/cpp-library-first-implementation.md)
 - [raw visualization and export](docs/raw-visualization-and-export.md)
+- [project goals and mission](docs/project-goals.md)
+- [experimental high-FPS roadmap](docs/experimental-high-fps-roadmap.md)
+- [kernel sensor-driver integration](docs/kernel-driver-integration.md)
 - [camera support and crop testing](docs/camera-support-and-crop-testing.md)
 - [high-FPS capture method](docs/high-fps-capture-method.md)
 
