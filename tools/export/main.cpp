@@ -6,12 +6,14 @@
 #include <tiffio.h>
 #endif
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdio>
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <numeric>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -24,6 +26,7 @@ void usage()
 {
     std::cerr << "usage:\n"
                  "  hscam-export inspect CAPTURE.hscap\n"
+                 "  hscam-export stats CAPTURE.hscap --frame N\n"
                  "  hscam-export recover CAPTURE.hscap\n"
                  "  hscam-export image CAPTURE.hscap --frame N --output frame.png\n"
                  "  hscam-export dng CAPTURE.hscap --frame N --output frame.dng\n"
@@ -241,6 +244,42 @@ int main(int argc, char **argv)
             if (const auto fps = sensorAverageFps(reader))
                 std::cout << "sensor timestamp FPS: " << std::fixed
                           << std::setprecision(6) << *fps << "\n";
+            return 0;
+        }
+        if (command == "stats") {
+            if (!output.empty()) throw std::runtime_error("stats does not take --output");
+            const auto raw = hscam::raw::decodeRaw(m, reader.readFrame(frame));
+            if (raw.pixels.empty()) throw hscam::Error("empty RAW frame");
+            auto samples = raw.pixels;
+            std::sort(samples.begin(), samples.end());
+            const auto percentile = [&](std::size_t pct) {
+                return samples[(samples.size() - 1) * pct / 100];
+            };
+            const unsigned white = raw.bitDepth >= 16 ? 65535U : ((1U << raw.bitDepth) - 1U);
+            const auto total = std::accumulate(samples.begin(), samples.end(), 0.0);
+            const auto underOnePercent = std::count_if(samples.begin(), samples.end(),
+                [&](std::uint16_t v) { return v <= white / 100; });
+            const auto nearWhite = std::count_if(samples.begin(), samples.end(),
+                [&](std::uint16_t v) { return v >= white * 98 / 100; });
+            const auto &meta = reader.frameMetadata(frame);
+            std::cout << "frame=" << frame << " width=" << raw.size.width
+                      << " height=" << raw.size.height
+                      << " bits=" << raw.bitDepth
+                      << " samples=" << samples.size() << '\n'
+                      << "raw_min=" << samples.front()
+                      << " p01=" << percentile(1) << " p50=" << percentile(50)
+                      << " p95=" << percentile(95) << " p99=" << percentile(99)
+                      << " raw_max=" << samples.back()
+                      << " white=" << white << '\n'
+                      << std::fixed << std::setprecision(2)
+                      << "mean=" << total / samples.size()
+                      << " under_1pct_pct=" << underOnePercent * 100.0 / samples.size()
+                      << " near_white_pct=" << nearWhite * 100.0 / samples.size()
+                      << '\n';
+            if (meta.exposure) std::cout << "actual_exposure_us=" << meta.exposure->count() << '\n';
+            if (meta.analogueGain) std::cout << "actual_analogue_gain=" << *meta.analogueGain << '\n';
+            if (meta.frameDuration) std::cout << "actual_frame_duration_us=" << meta.frameDuration->count() << '\n';
+            std::cout << "Raw pixel values before gamma/ISP tone mapping; low values may yield a very dark PNG.\\n";
             return 0;
         }
         if (output.empty()) throw std::runtime_error("--output is required");
