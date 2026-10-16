@@ -280,6 +280,91 @@ Uploading the generated PNG allows external pixel inspection.
 A later probe should record RAW percentile statistics and
 check frame-to-frame exposure and gain metadata.
 
+## Retest outcome: manual exposure applies, RAW remains near black
+
+The experiment owner reran the 640×240 sensor mode at 60 FPS with
+`--exposure-us 8000 --gain 4 --tag exp8ms-g4 --save-payload`.
+The Pi again returned 180 completed frames, 0 gaps, 0 overruns and
+59.921 FPS. The 90th saved frame remained visually black/very dark.
+
+The recorded RAW statistics show:
+
+| Metric | Initial 60 FPS capture | 8 ms / 4× retest |
+| --- | ---: | ---: |
+| Actual exposure | 994 µs | 7,979 µs |
+| Actual analogue gain | 8× | 4× |
+| RAW p01 / median | 9 / 14 | 11 / 15 |
+| RAW p95 / p99 | 17 / 19 | 22 / 24 |
+| RAW maximum | 39 | 36 |
+| RAW mean | 13.59 | 16.06 |
+| Frame duration | 16,657 µs | 16,657 µs |
+
+All statistics are RAW10 values out of 1023. **The 8 ms exposure
+was really applied**; therefore failure to apply exposure is not a
+satisfactory primary explanation. The sensor still delivers very
+little image signal above the apparent dark-code region; the linear
+PNG export alone is not the reason the underlying RAW values are low.
+However, the captured HSCAP frames and PNG pixels have not yet
+been externally inspected, and no comparable stock-mode measurement
+is available to identify the root cause.
+
+### Next discriminating experiment: stock VGA mode, same lighting
+
+Leave the experimental module installed and loaded. Its **original
+stock 640×480 mode** was preserved unchanged; use this mode to obtain
+a control capture with the *same* lamp, camera orientation, 60 FPS,
+8 ms exposure and 4× gain. No sensor I²C pokes or module reloads are
+needed. First confirm that stock mode ID `146a3eee8add7422` still
+appears in `build/hscam-inspect --json`.
+
+From the repository root:
+
+```bash
+build/hscam-inspect --json
+
+build/hscam-capture \
+  --mode 146a3eee8add7422 \
+  --raw \
+  --size 640x480 \
+  --representation uncompressed \
+  --frame-duration-us 16667 \
+  --exposure-us 8000 \
+  --gain 4 \
+  --frames 60 \
+  --output qualification/work/ov5647-stock-vga-reference-8ms-g4.hscap
+
+build/hscam-export stats \
+  qualification/work/ov5647-stock-vga-reference-8ms-g4.hscap \
+  --frame 30
+
+build/hscam-export image \
+  qualification/work/ov5647-stock-vga-reference-8ms-g4.hscap \
+  --frame 30 \
+  --output qualification/work/ov5647-stock-vga-reference-8ms-g4-frame30.png
+```
+
+Only run this once: the output path is intended to preserve evidence,
+not overwrite a prior stock baseline. The 640×480 stock test should
+negotiate actual sensor 640×480 RAW output; inspect the configuration
+log before interpreting its image.
+
+- If stock VGA has a clear scene and much larger RAW median/p95
+  under the same conditions, the **experimental 640×240 mode**
+  (window geometry, vertical increments, analog register settings
+  or timing) is the priority defect. Do not increase FPS or assume
+  the candidate's 0x3806/0x3807 and 0x3815 are coherent.
+- If stock VGA is similarly dark, first check the lighting, lens,
+  static scene and/or a normally processed stock-mode capture; then
+  investigate the shared RAW decoding/alignment or exposure pipeline.
+- In either case, retain the original bundles and PNGs. Upload the
+  reference and experimental PNGs if possible for side-by-side image
+  inspection. Avoid changing the driver register table until the
+  stock-versus-experimental result is known.
+
+**60 FPS timing is provisionally demonstrated, but valid high-speed
+imaging is not. Continue to block 90+ FPS tests until a clear
+comparison frame passes the image-quality gate.**
+
 ## 6. Rollback if camera streaming fails
 
 The working stock module is preserved at:
