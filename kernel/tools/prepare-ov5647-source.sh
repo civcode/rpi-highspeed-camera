@@ -6,6 +6,7 @@ set -euo pipefail
 
 KERNEL_RELEASE="6.18.50+rpt-rpi-2712"
 SOURCE_VERSION="6.18.50-1+rpt1"
+APT_VERSION="1:6.18.50-1+rpt1" # Debian kernel package epoch
 PKG="linux-source-6.18"
 OUT="${1:-kernel/work/ov5647-6.18.50}"
 
@@ -28,11 +29,18 @@ printf 'running kernel: %s\nsource package: %s=%s\noutput: %s\n'     "$KERNEL_RE
 
 if [[ ! -f "${PKG}_${SOURCE_VERSION}_all.deb" ]]; then
     printf '\nDownloading pinned source package (no root privileges)...\n'
-    apt download "${PKG}=${SOURCE_VERSION}" ||
+    # Debian kernel packages may have a 1: epoch; omitted from .deb filename.
+    apt download "${PKG}=${APT_VERSION}" ||
+        apt download "${PKG}=${SOURCE_VERSION}" ||
         fail "Exact source version not in configured apt indexes. Check apt-cache policy $PKG. Do not substitute latest."
 fi
 
 deb="${PKG}_${SOURCE_VERSION}_all.deb"
+declared_version=$(dpkg-deb --field "$deb" Version)
+if [[ "$declared_version" != "$APT_VERSION" &&
+      "$declared_version" != "$SOURCE_VERSION" ]]; then
+    fail "Downloaded package reports $declared_version; expected $SOURCE_VERSION"
+fi
 dpkg-deb -x "$deb" "$OUT/deb-extract"
 archive="$OUT/deb-extract/usr/src/linux-source-6.18.tar.xz"
 [[ -f "$archive" ]] ||
