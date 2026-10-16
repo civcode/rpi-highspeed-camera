@@ -13,7 +13,6 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
-#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -23,6 +22,7 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -268,7 +268,7 @@ struct SessionState : public std::enable_shared_from_this<SessionState> {
         libcamera::ControlList controls(supportedControls);
 
         if (config.timing.requestedFrameDuration) {
-            if (!supportedControls.contains(
+            if (!supportedControls.count(
                     libcamera::controls::FrameDurationLimits.id()))
                 throw Unsupported(
                     "camera does not support FrameDurationLimits");
@@ -287,26 +287,26 @@ struct SessionState : public std::enable_shared_from_this<SessionState> {
             config.timing.analogueGain.has_value();
 
         if (exposureRequested &&
-            !supportedControls.contains(
+            !supportedControls.count(
                 libcamera::controls::ExposureTime.id()))
             throw Unsupported(
                 "camera does not support manual exposure time");
         if (gainRequested &&
-            !supportedControls.contains(
+            !supportedControls.count(
                 libcamera::controls::AnalogueGain.id()))
             throw Unsupported(
                 "camera does not support manual analogue gain");
 
         const bool exposureModeSupported =
-            supportedControls.contains(
-                libcamera::controls::ExposureTimeMode.id());
+            supportedControls.count(
+                libcamera::controls::ExposureTimeMode.id()) != 0;
         const bool gainModeSupported =
-            supportedControls.contains(
-                libcamera::controls::AnalogueGainMode.id());
+            supportedControls.count(
+                libcamera::controls::AnalogueGainMode.id()) != 0;
 
         if ((exposureRequested && !exposureModeSupported) ||
             (gainRequested && !gainModeSupported)) {
-            if (!supportedControls.contains(
+            if (!supportedControls.count(
                     libcamera::controls::AeEnable.id()))
                 throw Unsupported(
                     "camera cannot switch requested exposure/gain "
@@ -543,7 +543,7 @@ struct SessionState : public std::enable_shared_from_this<SessionState> {
     CaptureConfiguration config;
     std::unique_ptr<libcamera::FrameBufferAllocator> allocator;
     std::vector<std::unique_ptr<libcamera::Request>> requests;
-    std::map<libcamera::FrameBuffer *, std::vector<MappedPlane>> mapped;
+    std::unordered_map<libcamera::FrameBuffer *, std::vector<MappedPlane>> mapped;
     internal::BoundedQueue<libcamera::Request *> completed;
     std::atomic_bool running{};
     std::atomic<std::size_t> leasedCount{};
@@ -759,14 +759,14 @@ public:
         return actual_;
     }
 
-    CaptureSession start() override
+    std::unique_ptr<CaptureSession::Impl> startImpl() override
     {
         if (!configured_ || !stream_)
             throw CaptureFailed("camera must be configured before start");
         auto state = std::make_shared<SessionState>(owner_, camera_, stream_, actual_);
         state->initialize();
         actual_ = state->config;
-        return CaptureSession(std::make_unique<LibcameraSession>(std::move(state)));
+        return std::make_unique<LibcameraSession>(std::move(state));
     }
 
 private:
@@ -829,17 +829,19 @@ public:
                 info.capabilities.sensorDefaultCrop = caps.sensorDefaultCrop;
             }
 
-            if (auto array = props.get(libcamera::properties::PixelArraySize))
-                info.pixelArray = toSize(*array);
+            // libcamera exposes the physical sensor array as a Rectangle
+            // (properties::PixelArrayArea); its width/height are the pixel array size.
+            if (auto area = props.get(libcamera::properties::PixelArrayArea))
+                info.pixelArray = Size{area->width, area->height};
             if (auto areas = props.get(libcamera::properties::PixelArrayActiveAreas)) {
                 info.activeAreas.reserve(areas->size());
                 for (const auto &area : *areas)
                     info.activeAreas.push_back(toRect(area));
             }
 
-            info.capabilities.exposureControl = camera->controls().contains(libcamera::controls::ExposureTime.id());
-            info.capabilities.analogueGainControl = camera->controls().contains(libcamera::controls::AnalogueGain.id());
-            info.capabilities.frameDurationControl = camera->controls().contains(libcamera::controls::FrameDurationLimits.id());
+            info.capabilities.exposureControl = camera->controls().count(libcamera::controls::ExposureTime.id()) != 0;
+            info.capabilities.analogueGainControl = camera->controls().count(libcamera::controls::AnalogueGain.id()) != 0;
+            info.capabilities.frameDurationControl = camera->controls().count(libcamera::controls::FrameDurationLimits.id()) != 0;
             info.sensorModes = enumerateRawModes(camera);
             info.capabilities.rawCapture = !info.sensorModes.empty();
             auto processed = camera->generateConfiguration({libcamera::StreamRole::VideoRecording});

@@ -34,7 +34,7 @@ public:
     virtual CropNegotiation trySensorCrop(Rect requested) const = 0;
     virtual std::optional<Rect> currentSensorCrop() const = 0;
     virtual const CaptureConfiguration &configuration() const = 0;
-    virtual CaptureSession start() = 0;
+    virtual std::unique_ptr<CaptureSession::Impl> startImpl() = 0;
 };
 
 } // namespace hscam

@@ -362,7 +362,7 @@ std::string testCaseKey(const TestCase &test)
     if (test.frameDurationUs) canonical << *test.frameDurationUs;
     canonical << '|' << (test.streamKind == hscam::StreamKind::Raw ? "raw" : "processed");
     canonical << '|' << test.durationMs << '|' << test.exact << '|' << test.requireZeroDrops;
-    return fnvHex(canonical.str());
+    return hscam::qualification::fnvHex(canonical.str());
 }
 
 Value cameraValue(const hscam::CameraInfo &camera)

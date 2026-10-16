@@ -54,6 +54,20 @@ inline std::string pathComponent(std::string_view input)
 
 inline bool insideRawBundle(const std::filesystem::path &relative);
 
+// Shared FNV-1a helper for the stable identifiers used by the qualification
+// plan and the resumable per-case keys.
+inline std::string fnvHex(std::string_view text)
+{
+    std::uint64_t hash = 1469598103934665603ULL;
+    for (const unsigned char ch : text) {
+        hash ^= ch;
+        hash *= 1099511628211ULL;
+    }
+    std::ostringstream out;
+    out << std::hex << std::setfill('0') << std::setw(16) << hash;
+    return out.str();
+}
+
 inline std::string qualificationPlanId(std::string_view campaignText,
                                        std::string_view cameraId,
                                        std::string_view hscamVersion,
@@ -70,14 +84,7 @@ inline std::string qualificationPlanId(std::string_view campaignText,
     canonical.push_back('\n');
     canonical.append(sourceRevision);
 
-    std::uint64_t hash = 1469598103934665603ULL;
-    for (const unsigned char ch : canonical) {
-        hash ^= ch;
-        hash *= 1099511628211ULL;
-    }
-    std::ostringstream out;
-    out << std::hex << std::setfill('0') << std::setw(16) << hash;
-    return out.str();
+    return fnvHex(canonical);
 }
 
 inline void copyPromotionTree(const std::filesystem::path &source,

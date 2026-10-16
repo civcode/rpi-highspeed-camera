@@ -65,7 +65,9 @@ const CaptureConfiguration &Camera::configuration() const {
 }
 CaptureSession Camera::start() {
     if (!impl_) throw CameraNotFound("empty Camera");
-    return impl_->start();
+    // The backend only produces the opaque session implementation; CaptureSession's
+    // implementation-taking constructor is private and Camera is its friend.
+    return CaptureSession(impl_->startImpl());
 }
 
 } // namespace hscam
