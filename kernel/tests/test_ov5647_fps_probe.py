@@ -31,6 +31,23 @@ class FPSProbeTests(unittest.TestCase):
             (270, 2, 1, 89.2),
         )
 
+    def test_exposure_within_60fps_frame_period(self):
+        self.assertEqual(probe.validate_exposure(60, 8000), 16667)
+        with self.assertRaisesRegex(ValueError, "strictly shorter"):
+            probe.validate_exposure(60, 16667)
+        with self.assertRaisesRegex(ValueError, "strictly shorter"):
+            probe.validate_exposure(60, 0)
+
+    def test_evidence_tag_prevents_collision_and_path_traversal(self):
+        self.assertEqual(
+            probe.evidence_basename(60, "exp8ms-g4"),
+            "ov5647-640x240-60fps-exp8ms-g4",
+        )
+        self.assertEqual(probe.evidence_basename(60, ""), "ov5647-640x240-60fps")
+        for bad in ("../bad", "a_b", "Bad", "a" * 41, "-oops", "space here"):
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, "--tag"):
+                probe.evidence_basename(60, bad)
+
     def test_find_exact_pi_sensor_mode(self):
         info = {"cameras": [
             {"model": "ov5647", "sensor_model": "ov5647", "modes": [
