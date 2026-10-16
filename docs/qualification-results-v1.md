@@ -316,7 +316,32 @@ The search does not assume that a requested frame duration was achieved.
 
 A probe is considered stable only when it satisfies the campaign's requirements, including delivered FPS relative to the requested frame duration, the zero-drop policy, and the configured maximum single-frame interval ratio. This prevents one long timestamp gap from being hidden by an acceptable average FPS.
 
-The discovered boundary is then re-run for the longer `final_duration_ms` validation period.
+The fastest candidate that passed the short probe is then re-run for the
+longer `final_duration_ms` validation period. If it fails, the runner tests
+other previously short-stable candidates from **fastest to slowest**, until a
+full-duration run passes. This prevents a single borderline short-run result
+from incorrectly marking an otherwise working sensor mode as entirely
+unstable. **No short-only result is published as maximum stable FPS.**
+
+The result retains `initial_candidate_us`, `final_validations` (each with
+`rejection_reasons`), and the complete `probes` list. Probe entries also
+record `duration_ms` and explicit `rejection_reasons`, which can include:
+
+- `measured_fps_below_minimum`;
+- `max_interval_exceeded`;
+- `delivered_frame_duration_exceeded`;
+- `missing_measured_fps` or `missing_capture_stats`;
+- `worker_status_*` when the capture worker did not pass.
+
+For example, 28.84 measured FPS at a requested 34,440 microseconds per
+frame clears a 99% average-FPS threshold, but the *same* probe may fail a
+single-frame interval or delivered-duration requirement. The rejection reason
+must identify which threshold failed.
+
+If **none** of the long validations pass, `best_frame_duration_us` and
+`best_measured_fps` are null, not a misleading extrapolation from the last
+failed candidate. The rejected observations remain available in
+`final_validations` and `final_result`.
 
 Intermediate probe results and their per-frame timing JSONL traces are retained under `search/<case-id>/`.
 
