@@ -152,7 +152,9 @@ Raw advertised-mode cases optionally include `raw_representation` (`auto`,
 libcamera Bayer pixel-format name), and `raw_sample_alignment`. These
 properties come from the campaign's optional `raw_capture` manifest block
 and are frozen into the case ID and worker input. Both FPS measurements and
-subsequent HSCAP visual evidence use the same request.
+subsequent HSCAP visual evidence use the same request. Advertised-mode cases
+also freeze `mode_width` and `mode_height`; workers reject a libcamera
+configuration that silently adjusts the mode's expected dimensions.
 
 The processed path is significant for experimental sensor crops: it permits qualification of the sensor-level crop without requiring a secondary raw stream that could force a different pipeline configuration.
 
