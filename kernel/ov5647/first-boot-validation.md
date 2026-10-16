@@ -227,7 +227,14 @@ from other potential issues while preserving the first HSCAP and log:
 ```bash
 git pull origin dev
 python3 -m unittest discover -s kernel/tests -v
+cmake --build build --target hscam-export -j2
 
+# Quantify the original dark 60 FPS frame before changing exposure.
+build/hscam-export stats \
+  qualification/work/ov5647-640x240-60fps.hscap \
+  --frame 90
+
+# Retest the same sensor mode/rate without overwriting the original evidence.
 python3 kernel/ov5647/fps-probe.py \
   --fps 60 \
   --exposure-us 8000 \
@@ -235,11 +242,22 @@ python3 kernel/ov5647/fps-probe.py \
   --tag exp8ms-g4 \
   --save-payload
 
+build/hscam-export stats \
+  qualification/work/ov5647-640x240-60fps-exp8ms-g4.hscap \
+  --frame 90
+
 build/hscam-export image \
   qualification/work/ov5647-640x240-60fps-exp8ms-g4.hscap \
   --frame 90 \
   --output qualification/work/ov5647-640x240-60fps-exp8ms-g4-frame90.png
 ```
+
+The new `hscam-export stats` subcommand reports decoded linear RAW
+min/median/percentiles, near-black and near-white percentages, plus
+the actual recorded exposure and gain metadata where available.
+Compare `p50`/`p95` and real scene detail between the two captures.
+The diagnostic does not modify the recorded RAW. This exporter feature
+has been committed but must be rebuilt and executed on the Pi.
 
 The 8 ms exposure is less than the requested 16.667 ms period, so
 it is physically compatible with the requested 60 FPS cadence.
