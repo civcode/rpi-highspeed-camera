@@ -8,6 +8,7 @@
 #include "raw_capture.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -102,6 +103,15 @@ inline VisualSampleResult captureVisualSample(Context &context,
     auto session = camera.start();
     result.configuration = camera.configuration();
 
+    // Sample capture is outside the timing benchmark. Give auto-exposure time
+    // to converge before recording evidence, particularly for one-frame
+    // baseline samples where frame zero otherwise may be almost black.
+    const auto warmupEnd = std::chrono::steady_clock::now() + std::chrono::milliseconds(1000);
+    while (std::chrono::steady_clock::now() < warmupEnd) {
+        auto warmup = session.nextFrame(std::chrono::milliseconds(2500));
+        (void)warmup;
+    }
+
     BundleWriter writer(result.bundle, spec.cameraId, spec.cameraModel,
                         camera.configuration());
     for (std::uint64_t i = 0; i < spec.frameCount; ++i) {
@@ -128,11 +138,20 @@ inline VisualSampleResult captureVisualSample(Context &context,
             // A black/near-constant PNG can exist and pass the file-presence gate.
             // Reject such frames as visual evidence rather than publishing a
             // seemingly successful but uninformative image.
-            const auto [minimum, maximum] =
-                std::minmax_element(image.pixels.begin(), image.pixels.end());
-            if (minimum == image.pixels.end() ||
-                static_cast<unsigned>(*maximum) - static_cast<unsigned>(*minimum) < 4)
-                throw Error("near-constant preview; inspect exposure, gain and Bayer decoding");
+            std::array<std::uint64_t, 256> histogram{};
+            for (const auto pixel : image.pixels) ++histogram[pixel];
+            auto percentile = [&](std::uint64_t threshold) {
+                std::uint64_t count{};
+                for (unsigned v = 0; v < histogram.size(); ++v) {
+                    count += histogram[v];
+                    if (count > threshold) return v;
+                }
+                return 255U;
+            };
+            const auto p05 = percentile(image.pixels.size() * 5 / 100);
+            const auto p95 = percentile(image.pixels.size() * 95 / 100);
+            if (p95 < 8 || p95 - p05 < 6)
+                throw Error("black or near-constant preview; inspect exposure, gain and Bayer decoding");
             const auto path = directory /
                 (spec.label + "-frame-" + std::to_string(frameIndex) + ".png");
             raw::writePng(path, image);
