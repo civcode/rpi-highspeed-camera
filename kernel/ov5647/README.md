@@ -1,10 +1,12 @@
 # OV5647 experimental 640×240 — H5 candidate revision 1
 
-**Status: source transformer committed; NOT compiled or hardware validated.**
-This is a genuine experimental *sensor driver mode-table candidate*.
-It is neither an ISP crop nor a measured 180-FPS claim. Do not install the
-generated module until its compilation, runtime behavior and rollback plan
-have been reviewed. The user's active stock driver remains untouched.
+**Status (2026-10-16): compiled, staged and successfully booted on Pi 5;
+640×240 RAW capture achieved 32/32 frames at 29.8551 FPS with zero reported
+sequence gaps and queue overruns.** The capture/export pipeline delivered a
+PNG that the experiment owner viewed. This is a genuinely experimental
+sensor mode, not an ISP resize. The theoretical ~179 FPS target and
+exact physical pixel window have **not** been verified. The packaged
+stock module file remains available for rollback.
 
 ## Pinned baseline and provenance
 
@@ -101,10 +103,12 @@ installed or loaded. Successful compilation is not successful capture.
 The experimental module was successfully staged and activated on the
 Raspberry Pi 5 on 2026-10-16. libcamera enumerated a fifth OV5647 mode,
 `640×240-SGBRG10_CSI2P`, with mode ID `3fc920b29f2defb0`.
-**No actual 640×240 RAW frame or high-FPS measurement has been recorded
-yet.** See the [first-boot RAW validation procedure](first-boot-validation.md)
-for CMake rebuilding (`hscam-highspeed` was missing), initial 30-FPS
-capture, preview and rollback.
+**A first 640×240 RAW capture has now succeeded:** 32 frames,
+0 gaps, 0 overruns, measured 29.8551 FPS, 10-bit Bayer in a 16-bit
+uncompressed CFE container. The exporter produced a viewable PNG.
+The historical high-FPS target is still unmeasured. See the
+[first-boot and FPS validation log](first-boot-validation.md) for
+one-rate-at-a-time 60/90/120/150/170 FPS probes and rollback.
 
 ## Safe module override: opt-in, reboot-based
 
