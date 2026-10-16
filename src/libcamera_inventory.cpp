@@ -753,8 +753,17 @@ public:
             const unsigned storageBits = bayerBitDepth(result.stream.format.name);
             if (storageBits >= 8) {
                 result.stream.storageBits = storageBits;
-                const unsigned dataBits =
-                    nativeMode && nativeMode->bitDepth != 0 ? nativeMode->bitDepth : storageBits;
+                // PiSP COMP1 mode enumeration may omit the native sensor bit
+                // depth entirely. When the caller explicitly requests SBGGR10
+                // to obtain SGBRG16, that requested depth is the only available
+                // native-depth hint. Do not confuse 16-bit storage with 16-bit
+                // sensor precision.
+                const unsigned explicitBits =
+                    requestedFormatName.empty() ? 0 : bayerBitDepth(requestedFormatName);
+                const unsigned nativeBits =
+                    nativeMode && nativeMode->bitDepth != 0 ? nativeMode->bitDepth : explicitBits;
+                const unsigned dataBits = nativeBits && nativeBits <= storageBits
+                                               ? nativeBits : storageBits;
                 result.stream.dataBits = dataBits;
                 if (request.stream.sampleAlignment)
                     result.stream.sampleAlignment = *request.stream.sampleAlignment;
