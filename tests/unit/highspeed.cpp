@@ -66,6 +66,12 @@ int main()
         assessment = assessHighspeed(camera);
         require(assessment.referenceReadouts.size() == 4,
                 "OV5647 reference list should include four reduced heights");
+        require(assessment.strategy == HighspeedStrategy::ExperimentalModesAdvertised,
+                "experimental-size modes are candidates, not driver-needed stock inventory");
+        require(assessment.referenceModesAdvertised,
+                "reference mode presence should be detected");
+        require(!assessment.experimentallyValidated,
+                "newly advertised readout must not be mistaken for proof");
         const auto modes = matchExperimentalReadouts(
             camera, {{640, 128}, {640, 64}});
         require(modes.size() == 1 && modes.front().id == "experimental",
