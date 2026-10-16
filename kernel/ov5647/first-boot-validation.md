@@ -144,7 +144,8 @@ image-quality properties, high-FPS timing, or 179 FPS.
 ## 5. Only then increase the requested FPS
 
 The 30 FPS RAW test now passed. Next test **one requested FPS at
-a time** using the host-tested, fail-stop probe. Rebuild the updated
+a time** using the fail-stop probe (with host-only tests in the
+repository; its first Pi execution is still pending). Rebuild the updated
 userspace capture CLI first to obtain sensor timestamp interval ranges.
 
 ```bash
