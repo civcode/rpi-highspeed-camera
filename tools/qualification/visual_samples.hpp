@@ -5,7 +5,9 @@
 #include "hscam/error.hpp"
 #include "hscam/raw/render.hpp"
 #include "internal/json.hpp"
+#include "raw_capture.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -27,6 +29,7 @@ struct VisualSampleSpec {
     std::optional<Rect> crop;
     std::optional<std::int64_t> frameDurationUs;
     StreamKind streamKind{StreamKind::Raw};
+    RawCaptureSelection rawSelection;
     std::uint64_t frameCount{120};
     bool exact{};
     unsigned playbackFps{30};
@@ -35,6 +38,7 @@ struct VisualSampleSpec {
 struct VisualSampleResult {
     std::string label;
     std::filesystem::path bundle;
+    CaptureConfiguration configuration;
     std::vector<std::filesystem::path> pngs;
     std::optional<std::filesystem::path> dng;
     std::optional<std::filesystem::path> video;
@@ -89,11 +93,14 @@ inline VisualSampleResult captureVisualSample(Context &context,
                                      : NegotiationPolicy::AllowAdjustments;
     request.sensor.modeId = spec.modeId;
     request.sensor.crop = spec.crop;
+    applyRawCaptureSelection(request, spec.rawSelection);
     if (spec.frameDurationUs)
         request.timing.frameDuration = std::chrono::microseconds(*spec.frameDurationUs);
 
-    (void)camera.configure(request);
+    const auto configuration = camera.configure(request);
+    verifyRawCaptureSelection(request, configuration, true);
     auto session = camera.start();
+    result.configuration = camera.configuration();
 
     BundleWriter writer(result.bundle, spec.cameraId, spec.cameraModel,
                         camera.configuration());
@@ -118,6 +125,14 @@ inline VisualSampleResult captureVisualSample(Context &context,
         try {
             const auto image = raw::renderPreview(reader.manifest(),
                                                   reader.readFrame(frameIndex));
+            // A black/near-constant PNG can exist and pass the file-presence gate.
+            // Reject such frames as visual evidence rather than publishing a
+            // seemingly successful but uninformative image.
+            const auto [minimum, maximum] =
+                std::minmax_element(image.pixels.begin(), image.pixels.end());
+            if (minimum == image.pixels.end() ||
+                static_cast<unsigned>(*maximum) - static_cast<unsigned>(*minimum) < 4)
+                throw Error("near-constant preview; inspect exposure, gain and Bayer decoding");
             const auto path = directory /
                 (spec.label + "-frame-" + std::to_string(frameIndex) + ".png");
             raw::writePng(path, image);
@@ -127,6 +142,9 @@ inline VisualSampleResult captureVisualSample(Context &context,
                                       ": " + e.what());
         }
     }
+
+    if (result.pngs.empty())
+        throw Error("visual sample has no usable PNG frames; check exposure and RAW format");
 
     if (fs::exists(exporter)) {
         const auto dng = directory / (spec.label + ".dng");
@@ -177,6 +195,14 @@ inline internal::json::Value visualSampleValue(const VisualSampleResult &sample,
     return Value::Object{
         {"label", sample.label},
         {"bundle", relative(sample.bundle)},
+        {"negotiated_pixel_format", sample.configuration.stream.format.name},
+        {"requested_pixel_format", sample.configuration.stream.requestedFormat
+                                       ? Value(sample.configuration.stream.requestedFormat->name)
+                                       : Value(nullptr)},
+        {"raw_representation", std::string(representationName(sample.configuration.stream.representation))},
+        {"data_bits", static_cast<std::uint64_t>(sample.configuration.stream.dataBits)},
+        {"storage_bits", static_cast<std::uint64_t>(sample.configuration.stream.storageBits)},
+        {"sample_alignment", std::string(alignmentName(sample.configuration.stream.sampleAlignment))},
         {"pngs", std::move(pngs)},
         {"dng", sample.dng ? Value(relative(*sample.dng)) : Value(nullptr)},
         {"video", sample.video ? Value(relative(*sample.video)) : Value(nullptr)},
