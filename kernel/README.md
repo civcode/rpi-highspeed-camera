@@ -92,6 +92,15 @@ Sources:
 
 ## First OV5647 experimental driver milestone
 
+A reviewable **unvalidated** 640×240 candidate source transformer is now
+available at [`kernel/ov5647/`](ov5647/README.md). It creates an isolated
+`ov5647.c` with a new mode entry only when the stock source hash matches the
+user's tested Pi 5 package. It includes Python offline regression tests and a
+compile-only helper, **but no live module installation, module replacement,
+or measured high-FPS results**.
+
+
+
 The first actual patch must be based on the **matching** running Raspberry
 Pi kernel source, not indiscriminately applied to a different branch.
 Patch `drivers/media/i2c/ov5647.c` by adding an opt-in reduced-height
