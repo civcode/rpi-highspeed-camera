@@ -192,6 +192,76 @@ saved-HSCAP image evidence and then a 10–60 second drop/jitter test.
 Do not launch the full automatic FPS-search campaign before these
 manual capture and image gates are satisfied.
 
+## 60 FPS field result — timing passes, dark preview blocks progression
+
+On 2026-10-16, the Pi 5 returned:
+
+```text
+configured 640x240 SGBRG16 (requested SBGGR10),
+representation=uncompressed, bits=10/16, alignment=left, buffers=2
+frames=180 gaps=0 overruns=0 fps=59.921
+min_interval_us=16595 max_interval_us=22303
+consumer_starvations=0 requests_cancelled=2
+PROBE GATES PASSED
+```
+
+This is a **measured ~60 FPS result with no reported sequence gaps or
+buffer overruns**. The two cancelled requests may be outstanding queued
+buffers cancelled during normal shutdown; this is not the same as
+`sequenceGaps` or `completedQueueOverruns`. The 22.303 ms largest
+inter-frame interval does merit follow-up in longer runs.
+
+However, the exported frame 90 at this rate looked **black or very
+dark** to the experiment owner. Therefore, the **image-quality gate
+remains unpassed** and we should not increase to 90 FPS yet.
+
+The original probe forced `--exposure-us 1000` (1 ms), which may be
+too little indoors. Also, `hscam-export image` performs a basic
+linear-RAW-to-RGB conversion without the ISP's normal auto-brightness,
+gamma/tone mapping or color-processing pipeline. A dark preview
+alone doesn't prove corrupt RAW sensor data.
+
+A subsequent tagged 60 FPS trial can distinguish severe underexposure
+from other potential issues while preserving the first HSCAP and log:
+
+```bash
+git pull origin dev
+python3 -m unittest discover -s kernel/tests -v
+
+python3 kernel/ov5647/fps-probe.py \
+  --fps 60 \
+  --exposure-us 8000 \
+  --gain 4 \
+  --tag exp8ms-g4 \
+  --save-payload
+
+build/hscam-export image \
+  qualification/work/ov5647-640x240-60fps-exp8ms-g4.hscap \
+  --frame 90 \
+  --output qualification/work/ov5647-640x240-60fps-exp8ms-g4-frame90.png
+```
+
+The 8 ms exposure is less than the requested 16.667 ms period, so
+it is physically compatible with the requested 60 FPS cadence.
+This exposure/gain pair is a **diagnostic starting point**, not a
+sensor-calibrated brightness recommendation. Prefer a normally lit
+test scene with visible edges rather than increasing gain indefinitely.
+
+The revised probe logs requested exposure/gain, supports `--tag`
+to avoid overwriting earlier evidence, rejects exposure greater than
+or equal to the frame period, and refuses duplicate output paths.
+All physical FPS and image-quality claims remain contingent on
+captured buffers and visual inspection.
+
+If it stays black, **stop** the ramp. Check `hscam-export inspect`
+for geometry, alignment and 10/16-bit metadata; compare the test
+against an unmodified 640×480 sensor mode under the **same exposure
+and gain**; investigate RAW sample values, Bayer orientation and
+register timing before changing kernel profile clocks or row bounds.
+Uploading the generated PNG allows external pixel inspection.
+A later probe should record RAW percentile statistics and
+check frame-to-frame exposure and gain metadata.
+
 ## 6. Rollback if camera streaming fails
 
 The working stock module is preserved at:
