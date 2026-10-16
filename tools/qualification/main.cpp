@@ -4,6 +4,7 @@
 #include "internal/json.hpp"
 #include "crop_geometry.hpp"
 #include "visual_samples.hpp"
+#include "raw_capture.hpp"
 #include "promote.hpp"
 
 #include <algorithm>
@@ -42,6 +43,7 @@ struct Policy {
     std::string campaign;
     std::uint64_t workerTimeoutMs{15000};
     bool requireZeroDrops{true};
+    hscam::qualification::RawCaptureSelection rawCapture;
     bool advertisedEnabled{true};
     std::uint64_t advertisedDurationMs{3000};
     bool cropsEnabled{};
@@ -81,6 +83,7 @@ struct TestCase {
     std::optional<hscam::Rect> crop;
     std::optional<std::int64_t> frameDurationUs;
     hscam::StreamKind streamKind{hscam::StreamKind::Raw};
+    hscam::qualification::RawCaptureSelection rawCapture;
     std::uint64_t durationMs{3000};
     bool exact{true};
     bool requireZeroDrops{true};
@@ -240,6 +243,41 @@ Policy parsePolicy(const Value &root)
     policy.workerTimeoutMs = uintOr(root, "worker_timeout_ms", policy.workerTimeoutMs);
     policy.requireZeroDrops = boolOr(root, "require_zero_drops", true);
 
+    // A RAW encoding policy is frozen into each case and used for both timing
+    // and subsequent visual evidence. PiSP COMP1 names omit the sensor bit depth,
+    // so allow an explicit Bayer format when autodetection is impossible.
+    if (const auto *raw = root.find("raw_capture")) {
+        if (const auto *rep = raw->find("representation")) {
+            const auto value = rep->asString();
+            if (value == "auto") policy.rawCapture.representation = hscam::RawRepresentation::Auto;
+            else if (value == "uncompressed") policy.rawCapture.representation = hscam::RawRepresentation::Uncompressed;
+            else if (value == "compressed") policy.rawCapture.representation = hscam::RawRepresentation::Compressed;
+            else throw std::runtime_error("invalid raw_capture.representation: " + value);
+        }
+        if (const auto *format = raw->find("format")) {
+            const auto name = format->asString();
+            if (name.empty() || hscam::classifyRawEncoding(name) == hscam::RawEncoding::Unknown)
+                throw std::runtime_error("raw_capture.format must name a Bayer pixel format");
+            policy.rawCapture.format = hscam::PixelFormat{name};
+        }
+        if (const auto *alignment = raw->find("sample_alignment")) {
+            const auto value = alignment->asString();
+            if (value == "left") policy.rawCapture.sampleAlignment = hscam::SampleAlignment::Left;
+            else if (value == "right") policy.rawCapture.sampleAlignment = hscam::SampleAlignment::Right;
+            else if (value == "native") policy.rawCapture.sampleAlignment = hscam::SampleAlignment::Native;
+            else throw std::runtime_error("invalid raw_capture.sample_alignment: " + value);
+        }
+        if (policy.rawCapture.format) {
+            const auto encoding = hscam::classifyRawEncoding(policy.rawCapture.format->name);
+            if (policy.rawCapture.representation == hscam::RawRepresentation::Uncompressed &&
+                encoding != hscam::RawEncoding::UnpackedBayer)
+                throw std::runtime_error("uncompressed raw_capture requires an unpacked Bayer format");
+            if (policy.rawCapture.representation == hscam::RawRepresentation::Compressed &&
+                encoding == hscam::RawEncoding::UnpackedBayer)
+                throw std::runtime_error("compressed raw_capture cannot specify an unpacked Bayer format");
+        }
+    }
+
     if (const auto *advertised = root.find("advertised_modes")) {
         policy.advertisedEnabled = boolOr(*advertised, "enabled", true);
         policy.advertisedDurationMs = uintOr(*advertised, "duration_ms", 3000);
@@ -328,6 +366,14 @@ Value caseValue(const TestCase &test)
         {"exact", test.exact},
         {"require_zero_drops", test.requireZeroDrops}
     };
+    if (test.streamKind == hscam::StreamKind::Raw) {
+        if (test.rawCapture.representation != hscam::RawRepresentation::Auto)
+            object["raw_representation"] = hscam::qualification::representationName(test.rawCapture.representation);
+        if (test.rawCapture.format)
+            object["raw_format"] = test.rawCapture.format->name;
+        if (test.rawCapture.sampleAlignment)
+            object["raw_sample_alignment"] = hscam::qualification::alignmentName(*test.rawCapture.sampleAlignment);
+    }
     return object;
 }
 
@@ -343,6 +389,22 @@ TestCase parseCase(const Value &root)
         if (kind->asString() == "raw") test.streamKind = hscam::StreamKind::Raw;
         else if (kind->asString() == "processed") test.streamKind = hscam::StreamKind::Processed;
         else throw std::runtime_error("invalid qualification stream_kind");
+    }
+    if (const auto *rep = root.find("raw_representation")) {
+        const auto value = rep->asString();
+        if (value == "auto") test.rawCapture.representation = hscam::RawRepresentation::Auto;
+        else if (value == "uncompressed") test.rawCapture.representation = hscam::RawRepresentation::Uncompressed;
+        else if (value == "compressed") test.rawCapture.representation = hscam::RawRepresentation::Compressed;
+        else throw std::runtime_error("invalid case raw_representation");
+    }
+    if (const auto *format = root.find("raw_format"))
+        test.rawCapture.format = hscam::PixelFormat{format->asString()};
+    if (const auto *alignment = root.find("raw_sample_alignment")) {
+        const auto value = alignment->asString();
+        if (value == "left") test.rawCapture.sampleAlignment = hscam::SampleAlignment::Left;
+        else if (value == "right") test.rawCapture.sampleAlignment = hscam::SampleAlignment::Right;
+        else if (value == "native") test.rawCapture.sampleAlignment = hscam::SampleAlignment::Native;
+        else throw std::runtime_error("invalid case raw_sample_alignment");
     }
     test.durationMs = root.at("duration_ms").asUInt64();
     test.exact = root.at("exact").asBool();
