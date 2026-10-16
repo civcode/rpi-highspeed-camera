@@ -24,6 +24,7 @@ endif()
 add_library(hscam
     src/context.cpp
     src/camera.cpp
+    src/highspeed.cpp
     src/types.cpp
     src/media/sensor_subdevice.cpp
     src/capture_format/bundle.cpp
@@ -75,6 +76,11 @@ if(HSCAM_BUILD_TOOLS)
     add_executable(hscam-inspect tools/inspect/main.cpp)
     target_link_libraries(hscam-inspect PRIVATE hscam::hscam)
     target_compile_options(hscam-inspect PRIVATE -Wall -Wextra -Wpedantic)
+
+    add_executable(hscam-highspeed tools/highspeed/main.cpp)
+    target_link_libraries(hscam-highspeed PRIVATE hscam::hscam)
+    target_include_directories(hscam-highspeed PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_compile_options(hscam-highspeed PRIVATE -Wall -Wextra -Wpedantic)
 
     add_executable(hscam-capture tools/capture/main.cpp)
     target_link_libraries(hscam-capture PRIVATE hscam::hscam)
@@ -132,7 +138,7 @@ install(
 )
 if(HSCAM_BUILD_TOOLS)
     install(
-        TARGETS hscam-inspect hscam-capture hscam-export hscam-qualify
+        TARGETS hscam-inspect hscam-highspeed hscam-capture hscam-export hscam-qualify
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     )
 endif()
@@ -165,6 +171,11 @@ if(HSCAM_BUILD_TESTS)
     target_link_libraries(hscam-unit-tests PRIVATE hscam::hscam hscam::raw)
     target_compile_options(hscam-unit-tests PRIVATE -Wall -Wextra -Wpedantic)
     add_test(NAME hscam-unit-tests COMMAND hscam-unit-tests)
+
+    add_executable(hscam-highspeed-tests tests/unit/highspeed.cpp)
+    target_link_libraries(hscam-highspeed-tests PRIVATE hscam::hscam)
+    target_compile_options(hscam-highspeed-tests PRIVATE -Wall -Wextra -Wpedantic)
+    add_test(NAME hscam-highspeed-tests COMMAND hscam-highspeed-tests)
 
     add_executable(hscam-promotion-tests tests/unit/promotion.cpp)
     target_include_directories(
