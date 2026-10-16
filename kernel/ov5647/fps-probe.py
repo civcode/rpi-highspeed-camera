@@ -10,6 +10,7 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import math
 import pathlib
 import re
 import subprocess
@@ -23,6 +24,24 @@ SUMMARY_RE = re.compile(
     r"\bframes=(\d+)\s+gaps=(\d+)\s+overruns=(\d+)(?:\s+fps=([\d.]+))?"
 )
 ROOT = pathlib.Path(__file__).resolve().parents[2]
+TAG_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,39}\\Z")
+
+
+def validate_exposure(fps: int, exposure_us: int) -> int:
+    """Reject nonphysical exposure requests before touching the camera."""
+    duration = round(1_000_000 / fps)
+    if not 1 <= exposure_us < duration:
+        raise ValueError(
+            f"exposure must be 1..{duration - 1} us at {fps} FPS "
+            "(strictly shorter than frame duration)"
+        )
+    return duration
+
+
+def evidence_basename(fps: int, tag: str) -> str:
+    if tag and not TAG_RE.fullmatch(tag):
+        raise ValueError("--tag must be 1-40 lowercase letters/digits/hyphens")
+    return f"ov5647-640x240-{fps}fps" + (f"-{tag}" if tag else "")
 
 
 def parse_capture_summary(output: str) -> tuple[int, int, int, float]:
@@ -84,13 +103,25 @@ def main() -> int:
                    help="Default: three seconds at the requested FPS")
     p.add_argument("--save-payload", action="store_true",
                    help="Store HSCAP evidence; otherwise discard payload for throughput")
+    p.add_argument("--exposure-us", type=int, default=1000,
+                   help="Manual exposure in us (default 1000; must be less than frame period)")
+    p.add_argument("--gain", type=float, default=None,
+                   help="Optional manual analogue gain, 1.0 to 16.0")
+    p.add_argument("--tag", default="",
+                   help="Evidence suffix (lowercase letters/digits/hyphens); use for retests")
     p.add_argument("--work-dir", type=pathlib.Path,
                    default=ROOT / "qualification/work")
     args = p.parse_args()
     if args.frames < 0 or args.frames > 10000:
         p.error("--frames must be between 0 and 10000")
     frames = args.frames or args.fps * 3
-    frame_duration_us = round(1000000 / args.fps)
+    try:
+        frame_duration_us = validate_exposure(args.fps, args.exposure_us)
+        base = evidence_basename(args.fps, args.tag)
+    except ValueError as e:
+        p.error(str(e))
+    if args.gain is not None and not (math.isfinite(args.gain) and 1.0 <= args.gain <= 16.0):
+        p.error("--gain must be finite and between 1.0 and 16.0")
     capture = ROOT / "build/hscam-capture"
     inspect = ROOT / "build/hscam-inspect"
     if not capture.is_file() or not inspect.is_file():
@@ -107,18 +138,21 @@ def main() -> int:
         return 2
 
     args.work_dir.mkdir(parents=True, exist_ok=True)
-    logfile = args.work_dir / f"ov5647-640x240-{args.fps}fps-probe.txt"
-    bundle = args.work_dir / f"ov5647-640x240-{args.fps}fps.hscap"
+    logfile = args.work_dir / f"{base}-probe.txt"
+    bundle = args.work_dir / f"{base}.hscap"
+    if logfile.exists() or (args.save_payload and bundle.exists()):
+        print("Refusing to overwrite existing experiment evidence; choose a fresh --tag",
+              file=sys.stderr)
+        return 2
     cmd = [
         str(capture), "--mode", mode, "--raw", "--size", "640x240",
         "--representation", "uncompressed",
         "--frame-duration-us", str(frame_duration_us),
-        "--exposure-us", "1000", "--frames", str(frames),
+        "--exposure-us", str(args.exposure_us), "--frames", str(frames),
     ]
+    if args.gain is not None:
+        cmd.extend(["--gain", str(args.gain)])
     if args.save_payload:
-        if bundle.exists():
-            print(f"Refusing to overwrite existing evidence: {bundle}", file=sys.stderr)
-            return 2
         cmd.extend(["--output", str(bundle)])
     else:
         cmd.append("--discard-payload")
@@ -132,11 +166,14 @@ def main() -> int:
         f"mode_id: {mode}",
         f"requested_fps: {args.fps}",
         f"requested_duration_us: {frame_duration_us}",
+        f"requested_exposure_us: {args.exposure_us}",
+        f"requested_analogue_gain: {args.gain}",
         f"frames_requested: {frames}",
         f"payload_saved: {args.save_payload}",
         "command: " + " ".join(cmd),
     ]
     print(f"Probe: {args.fps} FPS, {frames} frames, 640x240, RAW10 unpacked")
+    print(f"Exposure: {args.exposure_us} us; analogue gain: {args.gain if args.gain is not None else 'camera default'}")
     print(f"Log: {logfile}")
     print("No driver, boot or sensor-I2C changes. One FPS target per invocation.")
     try:
