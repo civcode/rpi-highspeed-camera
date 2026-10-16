@@ -129,7 +129,12 @@ git pull origin dev
 python3 -m unittest discover -s kernel/tests -v
 bash -n kernel/ov5647/manage-module-override.sh
 bash kernel/ov5647/manage-module-override.sh status
+bash kernel/ov5647/manage-module-override.sh check
 ```
+
+The `check` subcommand is read-only and refuses to proceed if the kernel
+release, module SHA-256/metadata, existing override, resolver or I²C driver
+binding do not match the audited state.
 
 Before staging, the resolver should point at the **stock `.ko.xz`**
 and `Override present: no`. Confirm that SSH/local-console access works,
