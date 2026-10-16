@@ -51,6 +51,28 @@ unsigned bitDepthFromFormat(const std::string &name)
     return 0;
 }
 
+std::string unpackedFormatForBits(unsigned bits)
+{
+    for (unsigned candidate : {8U, 10U, 12U, 14U, 16U})
+        if (bits == candidate)
+            return "SBGGR" + std::to_string(candidate);
+    return "SBGGR12";
+}
+
+bool isUncompressedFormat(const std::string &name)
+{
+    const auto upper = [](std::string v) {
+        std::transform(v.begin(), v.end(), v.begin(), [](unsigned char c) { return std::toupper(c); });
+        return v;
+    };
+    const std::string s = upper(name);
+    if (s.find("COMP1") != std::string::npos) return false;
+    if (s.find("CSI2P") != std::string::npos) return false;
+    for (const char *prefix : {"SRGGB", "SGRBG", "SGBRG", "SBGGR"})
+        if (s.find(prefix) != std::string::npos) return true;
+    return false;
+}
+
 std::vector<std::int64_t> systemDevices(const std::shared_ptr<libcamera::Camera> &camera)
 {
     std::vector<std::int64_t> out;
@@ -666,10 +688,44 @@ public:
 
         if (request.stream.size)
             stream.size = libcamera::Size(request.stream.size->width, request.stream.size->height);
+
+        const bool rawStream = request.stream.kind == StreamKind::Raw;
+        // Resolve the sensor's native (pre-negotiation) mode for the requested size so we can
+        // derive the requested representation and record the native bit depth (10 for OV5647).
+        const SensorMode *nativeMode{};
+        unsigned nativeBits{};
+        if (rawStream) {
+            const auto modes = enumerateRawModes(camera_);
+            auto byId = std::find_if(modes.begin(), modes.end(), [&](const SensorMode &m) {
+                return request.sensor.modeId && m.id == *request.sensor.modeId;
+            });
+            auto bySize = std::find_if(modes.begin(), modes.end(), [&](const SensorMode &m) {
+                return m.size.width == static_cast<std::uint32_t>(stream.size.width) &&
+                       m.size.height == static_cast<std::uint32_t>(stream.size.height);
+            });
+            nativeMode = byId != modes.end() ? &*byId : (bySize != modes.end() ? &*bySize : nullptr);
+            if (nativeMode) nativeBits = nativeMode->bitDepth;
+        }
+
+        std::string requestedFormatName; // explicit name or representation-derived request
         if (request.stream.format) {
             const auto format = libcamera::PixelFormat::fromString(request.stream.format->name);
             if (!format.isValid())
                 throw NegotiationFailed("invalid libcamera pixel format: " + request.stream.format->name);
+            stream.pixelFormat = format;
+            requestedFormatName = request.stream.format->name;
+        } else if (rawStream && request.stream.representation != RawRepresentation::Auto) {
+            // Derive the stream format from the requested representation and the sensor's
+            // native bit depth (mirrors rpicam-apps: unpacked 10-bit -> SBGGR10, which PiSP
+            // negotiates up to the 16-bit container SGBRG16; compressed -> native CSI-2).
+            if (!nativeMode)
+                throw NegotiationFailed("cannot determine the sensor's native format for the requested representation");
+            requestedFormatName = request.stream.representation == RawRepresentation::Uncompressed
+                                      ? unpackedFormatForBits(nativeBits)
+                                      : nativeMode->format.name;
+            const auto format = libcamera::PixelFormat::fromString(requestedFormatName);
+            if (!format.isValid())
+                throw NegotiationFailed("invalid libcamera pixel format: " + requestedFormatName);
             stream.pixelFormat = format;
         }
         if (request.stream.bufferCount)
@@ -693,9 +749,25 @@ public:
         result.stream.kind = request.stream.kind;
         result.stream.size = toSize(config->at(0).size);
         result.stream.format = {config->at(0).pixelFormat.toString()};
+        if (!requestedFormatName.empty())
+            result.stream.requestedFormat = PixelFormat{requestedFormatName};
+        result.stream.representation = request.stream.representation;
         result.stream.frameBytes = config->at(0).frameSize;
         result.stream.bufferCount = config->at(0).bufferCount;
         result.stream.planes.push_back({config->at(0).stride, config->at(0).frameSize});
+
+        // Record the storage container width vs the effective sensor bit depth so the offline
+        // decoder places the native sample correctly (10-bit in a 16-bit container, left-aligned
+        // on the Pi 5 CFE output). Only for genuine unpacked Bayer containers; the compressed
+        // PiSP format has no usable bit depth to record.
+        const unsigned storageBits = bitDepthFromFormat(result.stream.format.name);
+        result.stream.storageBits = storageBits;
+        if (storageBits >= 8 && isUncompressedFormat(result.stream.format.name)) {
+            result.stream.dataBits = nativeBits ? nativeBits : storageBits;
+            result.stream.sampleAlignment = result.stream.dataBits < result.stream.storageBits
+                                                ? SampleAlignment::Left
+                                                : SampleAlignment::Native;
+        }
         result.timing.requestedFrameDuration = request.timing.frameDuration;
         result.timing.exposure = request.timing.exposure;
         result.timing.analogueGain = request.timing.analogueGain;
@@ -715,13 +787,28 @@ public:
             const bool sizeWasRequested = request.stream.size.has_value() ||
                                           request.sensor.modeId.has_value() ||
                                           request.sensor.crop.has_value();
+            // The native format is pinned only when no representation override is active; a
+            // representation (Uncompressed/Compressed) intentionally re-packs the stream.
             const bool formatWasRequested = request.stream.format.has_value() ||
-                                            request.sensor.modeId.has_value();
+                                            (request.sensor.modeId.has_value() &&
+                                             request.stream.representation == RawRepresentation::Auto);
             const bool buffersWereRequested = request.stream.bufferCount != 0;
             if ((sizeWasRequested && sizeAdjusted) ||
                 (formatWasRequested && formatAdjusted) ||
                 (buffersWereRequested && buffersAdjusted))
                 throw ExactConfigurationFailed("libcamera adjusted an explicitly requested field");
+
+            // The requested representation must be honored even though the container format name
+            // is allowed to change (e.g. SBGGR10 -> SGBRG16 is still uncompressed).
+            if (rawStream && request.stream.representation != RawRepresentation::Auto) {
+                const std::string negotiated = config->at(0).pixelFormat.toString();
+                const bool requestedUncompressed =
+                    request.stream.representation == RawRepresentation::Uncompressed;
+                if (isUncompressedFormat(negotiated) != requestedUncompressed)
+                    throw ExactConfigurationFailed("requested " +
+                        std::string(requestedUncompressed ? "uncompressed" : "compressed") +
+                        " raw but the pipeline negotiated " + negotiated);
+            }
         }
 
         const int rc = camera_->configure(config.get());

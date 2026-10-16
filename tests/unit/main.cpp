@@ -259,4 +259,74 @@ void bundleRoundTrip()
 }
 }
 
-int main(){try{geometryAndModeIds();raw10Unpack();raw12Unpack();rawPartialGroups();rawFormatAndRenderCoverage();yuv420InfersPaddedChromaStride();bundleRejectsTrailingPayload();bundleRecovery();bundleRoundTrip();std::cout<<"hscam unit tests passed\n";return 0;}catch(const std::exception&e){std::cerr<<"unit test failed: "<<e.what()<<'\n';return 1;}}
+void bayer16ContainerDecode()
+{
+    using namespace hscam;
+    // Left-aligned (top-aligned) 10-bit samples in 16-bit little-endian containers.
+    {
+        BundleManifest m; m.configuration.stream.size={4,1}; m.configuration.stream.format={"SGBRG16"};
+        m.observedPlanes={{8,8}}; m.configuration.stream.dataBits=10; m.configuration.stream.sampleAlignment=SampleAlignment::Left;
+        const std::array<std::byte,8> bytes{std::byte{0x00},std::byte{0x00}, // 0
+                                            std::byte{0x40},std::byte{0x00}, // 64   (=1<<6)
+                                            std::byte{0x00},std::byte{0x80}, // 32768(=512<<6)
+                                            std::byte{0xA0},std::byte{0xFF}};  // 65408(=1022<<6)
+        const auto raw=raw::decodeRaw(m,bytes);
+        require(raw.pixels.size()==4,"16-bit container pixel count");
+        require(raw.pixels[0]==0&&raw.pixels[1]==1&&raw.pixels[2]==512&&raw.pixels[3]==1022,"left-aligned 10-bit extraction");
+        require(raw.bitDepth==10,"left-aligned decode bit depth");
+    }
+    // Right-aligned 10-bit samples in 16-bit containers.
+    {
+        BundleManifest m; m.configuration.stream.size={4,1}; m.configuration.stream.format={"SGBRG16"};
+        m.observedPlanes={{8,8}}; m.configuration.stream.dataBits=10; m.configuration.stream.sampleAlignment=SampleAlignment::Right;
+        const std::array<std::byte,8> bytes{std::byte{0x00},std::byte{0x00}, // 0
+                                            std::byte{0x01},std::byte{0x00}, // 1
+                                            std::byte{0xFF},std::byte{0x01}, // 511
+                                            std::byte{0xFE},std::byte{0x03}}; // 1022
+        const auto raw=raw::decodeRaw(m,bytes);
+        require(raw.pixels[0]==0&&raw.pixels[1]==1&&raw.pixels[2]==511&&raw.pixels[3]==1022,"right-aligned 10-bit extraction");
+        require(raw.bitDepth==10,"right-aligned decode bit depth");
+    }
+    // Native 16-bit sensor: containers kept as-is, bit depth 16.
+    {
+        BundleManifest m; m.configuration.stream.size={4,1}; m.configuration.stream.format={"SGBRG16"};
+        m.observedPlanes={{8,8}}; m.configuration.stream.dataBits=16; m.configuration.stream.sampleAlignment=SampleAlignment::Native;
+        const std::array<std::byte,8> bytes{std::byte{0x00},std::byte{0x00}, // 0
+                                            std::byte{0x00},std::byte{0x10}, // 4096
+                                            std::byte{0xFF},std::byte{0x07}, // 2047
+                                            std::byte{0x00},std::byte{0x10}}; // 4096
+        const auto raw=raw::decodeRaw(m,bytes);
+        require(raw.pixels[0]==0&&raw.pixels[1]==4096&&raw.pixels[2]==2047&&raw.pixels[3]==4096,"native 16-bit kept");
+        require(raw.bitDepth==16,"native 16-bit bit depth");
+    }
+    // Legacy bundle: no data_bits/alignment recorded -> 16-bit treated as native (backward compatible).
+    {
+        BundleManifest m; m.configuration.stream.size={2,1}; m.configuration.stream.format={"SGBRG16"};
+        m.observedPlanes={{4,4}};
+        const std::array<std::byte,4> bytes{std::byte{0x00},std::byte{0x10}, // 4096
+                                            std::byte{0xFF},std::byte{0x7E}}; // 32511
+        const auto raw=raw::decodeRaw(m,bytes);
+        require(raw.pixels[0]==4096&&raw.pixels[1]==32511,"legacy 16-bit native decode");
+        require(raw.bitDepth==16,"legacy 16-bit bit depth");
+    }
+}
+
+void manifestRawMetadataRoundTrip()
+{
+    using namespace hscam; const auto path=std::filesystem::temp_directory_path()/"hscam-rawmeta-unit.hscap"; std::error_code ec; std::filesystem::remove_all(path,ec);
+    CaptureConfiguration cfg; cfg.stream.kind=StreamKind::Raw; cfg.stream.size={4,1}; cfg.stream.format={"SGBRG16"};
+    cfg.stream.requestedFormat=PixelFormat{"SBGGR10"}; cfg.stream.representation=RawRepresentation::Uncompressed;
+    cfg.stream.storageBits=16; cfg.stream.dataBits=10; cfg.stream.sampleAlignment=SampleAlignment::Left; cfg.stream.frameBytes=8;
+    std::array<std::byte,8> pixels{}; PlaneView plane{pixels,8,8,-1}; FrameMetadata metadata; metadata.sequence=1;
+    { BundleWriter writer(path,"test-camera","synthetic",cfg); writer.append(metadata,std::span<const PlaneView>(&plane,1)); writer.finalize(); }
+    BundleReader reader(path); const auto &m=reader.manifest();
+    require(m.configuration.stream.format.name=="SGBRG16","roundtrip negotiated format");
+    require(m.configuration.stream.representation==RawRepresentation::Uncompressed,"roundtrip representation");
+    require(m.configuration.stream.storageBits==16,"roundtrip storage bits");
+    require(m.configuration.stream.dataBits==10,"roundtrip data bits");
+    require(m.configuration.stream.sampleAlignment==SampleAlignment::Left,"roundtrip alignment");
+    require(m.configuration.stream.requestedFormat && m.configuration.stream.requestedFormat->name=="SBGGR10","roundtrip requested format");
+    std::filesystem::remove_all(path,ec);
+}
+
+int main(){try{geometryAndModeIds();raw10Unpack();raw12Unpack();rawPartialGroups();rawFormatAndRenderCoverage();yuv420InfersPaddedChromaStride();bundleRejectsTrailingPayload();bundleRecovery();bundleRoundTrip();bayer16ContainerDecode();manifestRawMetadataRoundTrip();std::cout<<"hscam unit tests passed\n";return 0;}catch(const std::exception&e){std::cerr<<"unit test failed: "<<e.what()<<'\n';return 1;}}

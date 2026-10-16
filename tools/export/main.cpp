@@ -222,8 +222,20 @@ int main(int argc, char **argv)
         hscam::BundleReader reader(capture);
         const auto &m = reader.manifest();
         if (command == "inspect") {
+            const auto &st = m.configuration.stream;
+            const char *rep = st.representation == hscam::RawRepresentation::Uncompressed ? "uncompressed"
+                               : st.representation == hscam::RawRepresentation::Compressed ? "compressed" : "auto";
+            const char *align = st.sampleAlignment == hscam::SampleAlignment::Left ? "left"
+                               : st.sampleAlignment == hscam::SampleAlignment::Right ? "right" : "native";
             std::cout << "camera: " << m.cameraModel << " (" << m.cameraId << ")\n"
-                      << "stream: " << m.configuration.stream.size << " " << m.configuration.stream.format.name << "\n"
+                      << "stream: " << st.size << " " << st.format.name
+                      << (st.requestedFormat && st.requestedFormat->name != st.format.name
+                             ? " (requested " + st.requestedFormat->name + ")" : "") << "\n"
+                      << "representation: " << rep
+                      << " bits: " << st.dataBits << "/" << st.storageBits
+                      << " alignment: " << align
+                      << " stride: " << (m.observedPlanes.empty() ? 0 : m.observedPlanes.front().stride)
+                      << " frame_bytes: " << st.frameBytes << "\n"
                       << "frames: " << m.frameCount << "\n"
                       << "complete: " << (m.complete ? "yes" : "no") << "\n";
             if (const auto fps = sensorAverageFps(reader))

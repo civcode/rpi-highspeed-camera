@@ -60,6 +60,22 @@ Example:
 
 Values above are illustrative.
 
+Raw streams may additionally carry these optional fields (absent on older bundles and on processed streams):
+
+```json
+{
+  "stream": {
+    "kind": "raw",
+    "pixel_format": "SGBRG16",
+    "requested_format": "SBGGR10",
+    "representation": "uncompressed",
+    "storage_bits": 16,
+    "data_bits": 10,
+    "sample_alignment": "left"
+  }
+}
+```
+
 ### Fields
 
 - `schema_version`: HSCAP manifest schema. v0.1 writes `1`.
@@ -74,6 +90,13 @@ Values above are illustrative.
 - `stream.width` / `height`: negotiated stream dimensions.
 - `stream.frame_bytes`: negotiated frame size from libcamera.
 - `stream.planes`: observed plane layout from delivered buffers. Each object records `stride` and `size`. A `stride` value of `0` means that the backend could not obtain an independent stride for that plane; it must not be interpreted as tightly packed. For planar YUV420, the v0.1 renderer infers an unknown chroma stride from the negotiated padded luma stride.
+- `stream.requested_format`: optional (raw). The pixel format that was explicitly requested, or derived from the requested representation, when it differs from the negotiated format. Absent when nothing was explicitly requested.
+- `stream.representation`: optional (raw). `uncompressed` or `compressed`, recording which raw representation class was requested.
+- `stream.storage_bits`: optional (raw). Container bit depth implied by the negotiated pixel format.
+- `stream.data_bits`: optional (raw). Effective native sensor bit depth. When lower than `storage_bits`, the native sample sits at the top of the wider container.
+- `stream.sample_alignment`: optional (raw). `left` or `right`; how the native sample is positioned inside the wider container. On the Raspberry Pi 5 the PiSP CFE emits the native sample left-aligned (top-aligned) in a 16-bit container, so a 10-bit sensor stream negotiated to `SGBRG16` stores `sample = value << 6` and the decoder recovers `value = word >> (storage_bits - data_bits)`.
+
+These fields are written only when they are meaningful, so existing bundles (and processed streams) keep the original schema and remain readable.
 - `timing.requested_frame_duration_us`: requested fixed frame duration, if one was supplied.
 - `timing.exposure_us`: requested exposure, if supplied.
 - `timing.analogue_gain`: requested analogue gain, if supplied.

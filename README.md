@@ -94,6 +94,17 @@ build/hscam-capture \
   --output example.hscap
 ```
 
+Request **uncompressed** Bayer explicitly. On the Raspberry Pi 5 the default raw role negotiates to the PiSP compressed `GBRG_PISP_COMP1`; passing `--representation uncompressed` (or an explicit unpacked format such as `--format SBGGR10`) selects the sensor's unpacked stream instead, which negotiates to a 16-bit Bayer container (`SGBRG16`). The negotiated container, requested format, and 10-bit/16-bit alignment are recorded in the bundle so `hscam-export` can decode the native sample width exactly:
+
+```bash
+build/hscam-capture \
+  --camera CAMERA_ID \
+  --mode MODE_ID \
+  --representation uncompressed \
+  --frames 64 \
+  --output uncompressed.hscap
+```
+
 For a sensor that exposes mutable cropping, an experimental high-FPS request can use the processed/no-secondary-raw path used by the known GScrop technique:
 
 ```bash

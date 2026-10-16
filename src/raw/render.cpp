@@ -268,8 +268,18 @@ RawFrame16 decodeRaw(const BundleManifest &manifest, std::span<const std::byte> 
                                                                                       : (layout.bitDepth <= 8 ? w : static_cast<std::size_t>(w) * 2));
     if (payload.size() < stride * h) throw Error("truncated raw payload");
 
-    RawFrame16 out{{w, h}, layout.bitDepth, layout.bayer, std::vector<std::uint16_t>(static_cast<std::size_t>(w) * h)};
-    const unsigned mask = layout.bitDepth >= 16 ? 0xffffU : ((1U << layout.bitDepth) - 1U);
+    // Distinguish the storage container width from the effective sensor bit depth.
+    // On the Pi 5 a 10-bit sensor's unpacked stream is a 16-bit container (SGBRG16)
+    // with the native sample left-aligned (top-aligned): sample = word >> (16 - 10).
+    const unsigned storageBits = layout.bitDepth;
+    const unsigned dataBits = manifest.configuration.stream.dataBits
+                                  ? manifest.configuration.stream.dataBits
+                                  : storageBits;
+    const SampleAlignment alignment = manifest.configuration.stream.sampleAlignment;
+    const unsigned shift = dataBits < storageBits ? storageBits - dataBits : 0;
+    const unsigned mask = dataBits >= 16 ? 0xffffU : ((1U << dataBits) - 1U);
+
+    RawFrame16 out{{w, h}, dataBits, layout.bayer, std::vector<std::uint16_t>(static_cast<std::size_t>(w) * h)};
     for (std::uint32_t y = 0; y < h; ++y) {
         const auto *row = payload.data() + static_cast<std::size_t>(y) * stride;
         auto *dst = out.pixels.data() + static_cast<std::size_t>(y) * w;
@@ -280,7 +290,18 @@ RawFrame16 decodeRaw(const BundleManifest &manifest, std::span<const std::byte> 
             for (std::uint32_t x = 0; x < w; ++x) dst[x] = std::to_integer<unsigned char>(row[x]) & mask;
         } else if (!layout.csi2Packed && layout.bitDepth <= 16) {
             if (stride < static_cast<std::size_t>(w) * 2) throw Error("unpacked raw stride shorter than 16-bit row");
-            for (std::uint32_t x = 0; x < w; ++x) dst[x] = readLe16(row + x * 2) & mask;
+            for (std::uint32_t x = 0; x < w; ++x) {
+                std::uint16_t value = readLe16(row + x * 2);
+                if (dataBits < storageBits) {
+                    // PiSP CFE places the native sample at the top of the container
+                    // (left-aligned); right-aligned containers keep the low bits.
+                    if (alignment == SampleAlignment::Left)
+                        value = static_cast<std::uint16_t>(value >> shift);
+                    else
+                        value = static_cast<std::uint16_t>(value & mask);
+                }
+                dst[x] = value;
+            }
         } else {
             throw Unsupported("unsupported raw packing");
         }

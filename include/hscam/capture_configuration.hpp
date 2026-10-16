@@ -28,7 +28,12 @@ struct PlaneConfiguration {
 struct StreamConfiguration {
     StreamKind kind{StreamKind::Raw};
     Size size;
-    PixelFormat format;
+    PixelFormat format;                          // negotiated
+    std::optional<PixelFormat> requestedFormat; // explicit or representation-derived request
+    RawRepresentation representation{RawRepresentation::Auto};
+    unsigned storageBits{};                     // container bit depth (from the negotiated format)
+    unsigned dataBits{};                        // effective/native sensor bit depth (0 = same as storage)
+    SampleAlignment sampleAlignment{SampleAlignment::Native};
     std::vector<PlaneConfiguration> planes;
     std::size_t frameBytes{};
     unsigned bufferCount{};

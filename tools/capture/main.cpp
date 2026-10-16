@@ -50,9 +50,17 @@ hscam::Rect parseCrop(const std::string &text)
 void usage()
 {
     std::cerr << "usage: hscam-capture [--camera ID] [--mode ID] [--frames N] [--raw|--processed]\n"
-                 "       [--size WxH] [--format PIXELFORMAT] [--crop X,Y,W,H]\n"
-                 "       [--frame-duration-us N] [--exposure-us N] [--gain X]\n"
+                 "       [--size WxH] [--format PIXELFORMAT] [--representation auto|uncompressed|compressed]\n"
+                 "       [--crop X,Y,W,H] [--frame-duration-us N] [--exposure-us N] [--gain X]\n"
                  "       [--exact] (--discard-payload | --output PATH.hscap)\n";
+}
+
+hscam::RawRepresentation parseRepresentation(const std::string &s)
+{
+    if (s == "auto") return hscam::RawRepresentation::Auto;
+    if (s == "uncompressed") return hscam::RawRepresentation::Uncompressed;
+    if (s == "compressed") return hscam::RawRepresentation::Compressed;
+    throw std::runtime_error("invalid --representation: " + s);
 }
 }
 
@@ -65,6 +73,7 @@ int main(int argc, char **argv)
     std::uint64_t frameCount = 1000;
     bool discard = false;
     bool exact = false;
+    std::string representation = "auto";
     hscam::StreamKind streamKind = hscam::StreamKind::Raw;
     std::optional<hscam::Size> size;
     std::optional<hscam::Rect> crop;
@@ -91,6 +100,7 @@ int main(int argc, char **argv)
             else if (arg == "--output") output = value("--output");
             else if (arg == "--discard-payload") discard = true;
             else if (arg == "--exact") exact = true;
+            else if (arg == "--representation") representation = value("--representation");
             else if (arg == "--raw") streamKind = hscam::StreamKind::Raw;
             else if (arg == "--processed") streamKind = hscam::StreamKind::Processed;
             else { usage(); return 2; }
@@ -114,6 +124,7 @@ int main(int argc, char **argv)
         hscam::Camera camera = context.open(cameraId);
         hscam::CaptureRequest request;
         request.stream.kind = streamKind;
+        request.stream.representation = parseRepresentation(representation);
         request.negotiation = exact ? hscam::NegotiationPolicy::Exact : hscam::NegotiationPolicy::AllowAdjustments;
         if (!modeId.empty()) request.sensor.modeId = modeId;
         if (size) request.stream.size = size;
@@ -124,8 +135,18 @@ int main(int argc, char **argv)
         request.timing.analogueGain = gain;
 
         const auto config = camera.configure(request);
-        std::cout << "configured " << config.stream.size << " " << config.stream.format.name
-                  << ", buffers=" << config.stream.bufferCount;
+        const auto &st = config.stream;
+        const char *rep = st.representation == hscam::RawRepresentation::Uncompressed ? "uncompressed"
+                           : st.representation == hscam::RawRepresentation::Compressed ? "compressed" : "auto";
+        const char *align = st.sampleAlignment == hscam::SampleAlignment::Left ? "left"
+                           : st.sampleAlignment == hscam::SampleAlignment::Right ? "right" : "native";
+        std::cout << "configured " << st.size << " " << st.format.name
+                  << (st.requestedFormat && st.requestedFormat->name != st.format.name
+                         ? " (requested " + st.requestedFormat->name + ")" : "")
+                  << ", representation=" << rep
+                  << ", bits=" << st.dataBits << "/" << st.storageBits
+                  << ", alignment=" << align
+                  << ", buffers=" << st.bufferCount;
         if (config.sensor.crop) std::cout << ", sensor-crop=" << *config.sensor.crop;
         std::cout << "\n";
         for (const auto &a : config.adjustments)

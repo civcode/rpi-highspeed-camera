@@ -44,6 +44,27 @@ Value manifestValue(const BundleManifest &m)
     for (const auto &p : m.observedPlanes)
         planes.emplace_back(Value::Object{{"stride", static_cast<std::uint64_t>(p.stride)}, {"size", static_cast<std::uint64_t>(p.size)}});
 
+    Value stream = Value::Object{
+        {"kind", streamKindName(m.configuration.stream.kind)},
+        {"pixel_format", m.configuration.stream.format.name},
+        {"width", static_cast<std::uint64_t>(m.configuration.stream.size.width)},
+        {"height", static_cast<std::uint64_t>(m.configuration.stream.size.height)},
+        {"frame_bytes", static_cast<std::uint64_t>(m.configuration.stream.frameBytes)},
+        {"planes", Value(planes)}
+    };
+    if (m.configuration.stream.requestedFormat)
+        stream.asObject()["requested_format"] = m.configuration.stream.requestedFormat->name;
+    if (m.configuration.stream.representation != RawRepresentation::Auto)
+        stream.asObject()["representation"] = m.configuration.stream.representation == RawRepresentation::Uncompressed
+                                                   ? std::string("uncompressed") : std::string("compressed");
+    if (m.configuration.stream.storageBits != 0)
+        stream.asObject()["storage_bits"] = static_cast<std::uint64_t>(m.configuration.stream.storageBits);
+    if (m.configuration.stream.dataBits != 0)
+        stream.asObject()["data_bits"] = static_cast<std::uint64_t>(m.configuration.stream.dataBits);
+    if (m.configuration.stream.sampleAlignment != SampleAlignment::Native)
+        stream.asObject()["sample_alignment"] = m.configuration.stream.sampleAlignment == SampleAlignment::Left
+                                                     ? std::string("left") : std::string("right");
+
     Value::Object timing;
     if (m.configuration.timing.requestedFrameDuration)
         timing["requested_frame_duration_us"] = static_cast<std::int64_t>(m.configuration.timing.requestedFrameDuration->count());
@@ -62,12 +83,7 @@ Value manifestValue(const BundleManifest &m)
         {"camera", Value::Object{{"id", m.cameraId}, {"model", m.cameraModel}}},
         {"sensor", Value::Object{{"mode_id", m.configuration.sensor.modeId ? Value(*m.configuration.sensor.modeId) : Value(nullptr)},
                                  {"crop", rectValue(m.configuration.sensor.crop)}}},
-        {"stream", Value::Object{{"kind", streamKindName(m.configuration.stream.kind)},
-                                 {"pixel_format", m.configuration.stream.format.name},
-                                 {"width", static_cast<std::uint64_t>(m.configuration.stream.size.width)},
-                                 {"height", static_cast<std::uint64_t>(m.configuration.stream.size.height)},
-                                 {"frame_bytes", static_cast<std::uint64_t>(m.configuration.stream.frameBytes)},
-                                 {"planes", Value(std::move(planes))}}},
+        {"stream", std::move(stream)},
         {"timing", Value(std::move(timing))}
     };
 }
@@ -92,6 +108,13 @@ BundleManifest parseManifest(const Value &root)
     m.configuration.stream.size.width = static_cast<std::uint32_t>(stream.at("width").asUInt64());
     m.configuration.stream.size.height = static_cast<std::uint32_t>(stream.at("height").asUInt64());
     m.configuration.stream.frameBytes = static_cast<std::size_t>(stream.at("frame_bytes").asUInt64());
+    if (const auto rf = stream.find("requested_format")) m.configuration.stream.requestedFormat = PixelFormat{rf->asString()};
+    if (const auto rep = stream.find("representation"))
+        m.configuration.stream.representation = rep->asString() == "compressed" ? RawRepresentation::Compressed : RawRepresentation::Uncompressed;
+    if (const auto sb = stream.find("storage_bits")) m.configuration.stream.storageBits = static_cast<unsigned>(sb->asUInt64());
+    if (const auto db = stream.find("data_bits")) m.configuration.stream.dataBits = static_cast<unsigned>(db->asUInt64());
+    if (const auto al = stream.find("sample_alignment"))
+        m.configuration.stream.sampleAlignment = al->asString() == "left" ? SampleAlignment::Left : SampleAlignment::Right;
     for (const auto &p : stream.at("planes").asArray())
         m.observedPlanes.push_back({static_cast<std::uint32_t>(p.at("stride").asUInt64()),
                                     static_cast<std::uint32_t>(p.at("size").asUInt64())});

@@ -11,6 +11,8 @@ namespace hscam {
 
 enum class NegotiationPolicy { Exact, AllowAdjustments };
 enum class StreamKind { Raw, Processed };
+enum class RawRepresentation { Auto, Uncompressed, Compressed };
+enum class SampleAlignment { Native, Left, Right };
 
 struct SensorRequest {
     std::optional<std::string> modeId;
@@ -21,6 +23,7 @@ struct StreamRequest {
     StreamKind kind{StreamKind::Raw};
     std::optional<Size> size;
     std::optional<PixelFormat> format;
+    RawRepresentation representation{RawRepresentation::Auto};
     unsigned bufferCount{};
 };
 
