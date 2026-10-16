@@ -58,11 +58,16 @@ int main()
 
         camera = CameraInfo{};
         camera.sensorModel = "OV5647";
-        camera.sensorModes = {
-            SensorMode{.id = "normal", .size = {640, 480}},
-            SensorMode{.id = "experimental", .size = {640, 128}},
-            SensorMode{.id = "other", .size = {2592, 1944}}
-        };
+        SensorMode normal;
+        normal.id = "normal";
+        normal.size = {640, 480};
+        SensorMode experimental;
+        experimental.id = "experimental";
+        experimental.size = {640, 128};
+        SensorMode other;
+        other.id = "other";
+        other.size = {2592, 1944};
+        camera.sensorModes = {normal, experimental, other};
         assessment = assessHighspeed(camera);
         require(assessment.referenceReadouts.size() == 4,
                 "OV5647 reference list should include four reduced heights");
