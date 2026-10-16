@@ -1,5 +1,11 @@
 # RAW representation in camera qualification
 
+> This records the functioning OV5647 **baseline RAW path**. Experimental
+> reduced-height readout is the new priority and needs a modified kernel
+> driver for sensors whose stock driver lacks mutable ROI.
+> See [roadmap](experimental-high-fps-roadmap.md).
+> The same RAW policy can test true experimental modes once exposed.
+
 The qualification runner supports a campaign-wide RAW capture policy. The same
 policy is frozen into each advertised-mode case, passed to isolated FPS workers,
 and reused when recording HSCAP/PNG/video evidence. Processed sensor-crop
