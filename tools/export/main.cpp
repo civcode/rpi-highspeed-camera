@@ -279,7 +279,7 @@ int main(int argc, char **argv)
             if (meta.exposure) std::cout << "actual_exposure_us=" << meta.exposure->count() << '\n';
             if (meta.analogueGain) std::cout << "actual_analogue_gain=" << *meta.analogueGain << '\n';
             if (meta.frameDuration) std::cout << "actual_frame_duration_us=" << meta.frameDuration->count() << '\n';
-            std::cout << "Raw pixel values before gamma/ISP tone mapping; low values may yield a very dark PNG.\\n";
+            std::cout << "Raw pixel values before gamma/ISP tone mapping; low values may yield a very dark PNG.\n";
             return 0;
         }
         if (output.empty()) throw std::runtime_error("--output is required");
