@@ -3,6 +3,7 @@
 #include "hscam/error.hpp"
 #include "hscam/geometry.hpp"
 #include "hscam/raw/render.hpp"
+#include "raw_capture.hpp"
 
 #include <algorithm>
 #include <array>
@@ -403,4 +404,58 @@ void manifestRawValidation()
     std::filesystem::remove_all(path,ec);
 }
 
-int main(){try{geometryAndModeIds();raw10Unpack();raw12Unpack();rawPartialGroups();rawFormatAndRenderCoverage();yuv420InfersPaddedChromaStride();bundleRejectsTrailingPayload();bundleRecovery();bundleRoundTrip();bayer16ContainerDecode();manifestRawMetadataRoundTrip();rawEncodingClassification();manifestRawValidation();std::cout<<"hscam unit tests passed\n";return 0;}catch(const std::exception&e){std::cerr<<"unit test failed: "<<e.what()<<'\n';return 1;}}
+
+void qualificationRawSelection()
+{
+    using namespace hscam;
+    using namespace hscam::qualification;
+
+    CaptureRequest request;
+    request.stream.kind = StreamKind::Raw;
+    RawCaptureSelection selection;
+    selection.representation = RawRepresentation::Uncompressed;
+    selection.format = PixelFormat{"SBGGR10"};
+    selection.sampleAlignment = SampleAlignment::Left;
+    applyRawCaptureSelection(request, selection);
+    require(request.stream.format && request.stream.format->name == "SBGGR10",
+            "RAW selection propagates explicit pixel format");
+    require(request.stream.representation == RawRepresentation::Uncompressed,
+            "RAW selection propagates representation");
+    require(request.stream.sampleAlignment == SampleAlignment::Left,
+            "RAW selection propagates sample alignment");
+
+    CaptureConfiguration config;
+    config.stream.kind = StreamKind::Raw;
+    config.stream.format = {"SGBRG16"};
+    config.stream.representation = RawRepresentation::Uncompressed;
+    config.stream.dataBits = 10;
+    config.stream.storageBits = 16;
+    verifyRawCaptureSelection(request, config, true);
+
+    config.stream.format = {"GBRG_PISP_COMP1"};
+    bool rejected{};
+    try { verifyRawCaptureSelection(request, config, false); }
+    catch (const NegotiationFailed &) { rejected = true; }
+    require(rejected, "uncompressed request must reject a COMP1 adjustment");
+
+    // Automatic recording may allow compressed RAW for timing measurements,
+    // but the visual evidence stage must refuse undecodable COMP1 frames.
+    request.stream.representation = RawRepresentation::Auto;
+    request.stream.format.reset();
+    verifyRawCaptureSelection(request, config, false);
+    rejected = false;
+    try { verifyRawCaptureSelection(request, config, true); }
+    catch (const Unsupported &) { rejected = true; }
+    require(rejected, "COMP1 cannot satisfy PNG evidence requirement");
+
+    config.stream.format = {"SGBRG10_CSI2P"};
+    verifyRawCaptureSelection(request, config, true);
+
+    request.stream.kind = StreamKind::Processed;
+    applyRawCaptureSelection(request, selection);
+    require(!request.stream.format && request.stream.representation == RawRepresentation::Auto,
+            "processed capture ignores RAW selection");
+    verifyRawCaptureSelection(request, config, true);
+}
+
+int main(){try{geometryAndModeIds();raw10Unpack();raw12Unpack();rawPartialGroups();rawFormatAndRenderCoverage();yuv420InfersPaddedChromaStride();bundleRejectsTrailingPayload();bundleRecovery();bundleRoundTrip();bayer16ContainerDecode();manifestRawMetadataRoundTrip();rawEncodingClassification();manifestRawValidation();qualificationRawSelection();std::cout<<"hscam unit tests passed\n";return 0;}catch(const std::exception&e){std::cerr<<"unit test failed: "<<e.what()<<'\n';return 1;}}
