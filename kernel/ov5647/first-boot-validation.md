@@ -117,16 +117,78 @@ correct Bayer phase, row validity, black/missing areas, line shifts
 and repeated rows. Use a test scene with edges and a moving object.
 A plausible PNG is **necessary but insufficient** evidence of high FPS.
 
+## Verified Pi 5 first RAW capture (2026-10-16)
+
+The experiment owner completed the first 640×240 trial:
+
+```text
+Selected sensor format: 640x240-SGBRG10_1X10/RAW
+Selected CFE format: 640x240-GB16/RAW
+configured 640x240 SGBRG16 (requested SBGGR10),
+representation=uncompressed, bits=10/16, alignment=left, buffers=2
+adjusted stream.format: SBGGR10 -> SGBRG16
+frames=32 gaps=0 overruns=0 fps=29.8551
+```
+
+Settings: `--frame-duration-us 33333 --exposure-us 1000`,
+32 RAW frames to `ov5647-640x240-initial.hscap`.
+`hscam-export image` produced `ov5647-640x240-frame0.png`,
+which the experiment owner could view. The image itself has **not
+been independently inspected** or archived in this repository.
+
+This is a **successful real reduced-height RAW data-path capture**,
+not yet a validation of the sensor's physical window end line, complete
+image-quality properties, high-FPS timing, or 179 FPS.
+
 ## 5. Only then increase the requested FPS
 
-If and only if the first conservative capture works, measure a short
-`--discard-payload` run with a smaller frame duration, inspect actual
-sensor timestamps and confirm no drops or CSI-2 errors. The theoretical
-candidate ceiling is approximately `178.96 FPS` based on the driver's
+The 30 FPS RAW test now passed. Next test **one requested FPS at
+a time** using the host-tested, fail-stop probe. Rebuild the updated
+userspace capture CLI first to obtain sensor timestamp interval ranges.
+
+```bash
+git pull origin dev
+python3 -m unittest discover -s kernel/tests -v
+cmake --build build --target hscam-capture hscam-export -j2
+python3 kernel/ov5647/fps-probe.py --fps 60 --save-payload
+```
+
+The probe checks the pinned module SHA256, live I²C binding and
+actual advertised 640×240 RAW10 mode. It saves an evidence log under
+ignored `qualification/work/`, and runs only **one** FPS setting.
+It fails if frames, geometry, uncompressed representation, gap counts,
+overruns or measured FPS (less than 90% of requested) do not pass.
+This is a screening threshold, **not an acceptance-quality jitter test**.
+
+For the 60 FPS sample, inspect a middle frame:
+
+```bash
+build/hscam-export image \
+  qualification/work/ov5647-640x240-60fps.hscap \
+  --frame 90 \
+  --output qualification/work/ov5647-640x240-60fps-frame90.png
+```
+
+Only if the output and image look good, attempt subsequent stages
+separately, reviewing each result before the next:
+
+```bash
+python3 kernel/ov5647/fps-probe.py --fps 90
+python3 kernel/ov5647/fps-probe.py --fps 120
+python3 kernel/ov5647/fps-probe.py --fps 150
+python3 kernel/ov5647/fps-probe.py --fps 170
+```
+
+**Do not paste all ramp commands as an unattended batch:** stop on
+the first failure or frame corruption and inspect the logs.
+The raw sensor mode, CSI timings and CFE path are experimental.
+The theoretical ceiling is approximately `178.96 FPS` from
 `pixel_rate/HTS/VTS`, **not a measurement**.
 
-Avoid launching the full automatic FPS-search campaign before a short
-unpacked RAW run and visual verification.
+At the highest preliminarily stable rate, produce additional short
+saved-HSCAP image evidence and then a 10–60 second drop/jitter test.
+Do not launch the full automatic FPS-search campaign before these
+manual capture and image gates are satisfied.
 
 ## 6. Rollback if camera streaming fails
 
