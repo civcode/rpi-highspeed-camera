@@ -182,6 +182,14 @@ int main(int argc, char **argv)
                   << " gaps=" << stats.sequenceGaps
                   << " overruns=" << stats.completedQueueOverruns;
         if (stats.measuredFps) std::cout << " fps=" << *stats.measuredFps;
+        if (stats.minInterval)
+            std::cout << " min_interval_us="
+                      << std::chrono::duration<double, std::micro>(*stats.minInterval).count();
+        if (stats.maxInterval)
+            std::cout << " max_interval_us="
+                      << std::chrono::duration<double, std::micro>(*stats.maxInterval).count();
+        std::cout << " consumer_starvations=" << stats.consumerStarvations
+                  << " requests_cancelled=" << stats.requestsCancelled;
         std::cout << '\n';
         return stats.completedQueueOverruns == 0 ? 0 : 3;
     } catch (const std::exception &e) {
