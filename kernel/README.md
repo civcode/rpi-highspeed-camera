@@ -54,7 +54,19 @@ downloads approximately 150 MB of source; it **does not install a kernel**.
 It creates files under `kernel/work/`, which should be excluded from Git.
 
 The next review step is to compare the installed kernel build configuration
-and driver source before modifying an experimental mode table:
+and driver source before modifying an experimental mode table. A read-only
+audit is available and checks the stored stock SHA256, actual I²C driver
+binding, kernel configuration and current OV5647 source mode table:
+
+```bash
+bash kernel/tools/audit-ov5647-source.sh | tee ov5647-source-audit.txt
+```
+
+The audit is informational. It does not compile, install, bind/unbind, or
+program a sensor driver. Retain the output for the first experimental patch.
+This output file is machine-specific, so keep it out of source commits.
+
+Additional manual diagnostic commands:
 
 ```bash
 dpkg-query -W 'linux-image-6.18.50+rpt-rpi-2712' 2>/dev/null || true
