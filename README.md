@@ -50,9 +50,12 @@ measured on hardware. See milestones H5–H9 in the active roadmap.
 
 A compiled experimental OV5647 module successfully loaded on the Pi 5
 running `6.18.50+rpt-rpi-2712` and exposed **640×240** as a fifth
-libcamera sensor mode. This does **not yet** prove valid RAW capture or
-the target FPS. See the
-[first-boot RAW validation checklist](kernel/ov5647/first-boot-validation.md).
+libcamera sensor mode. **The first 32 RAW frames were captured at 29.8551
+FPS with zero reported sequence gaps or overruns**, and a PNG was exported
+and viewed by the experiment owner. This validates the initial RAW
+pipeline, **not** the theoretical ~179 FPS ceiling or sensor-window
+image fidelity. See the
+[first-boot evidence and stepwise FPS validation checklist](kernel/ov5647/first-boot-validation.md).
 
 If `build/hscam-inspect` exists but `build/hscam-highspeed` is missing,
 reconfigure and build the new userspace target:
