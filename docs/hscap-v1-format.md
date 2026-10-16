@@ -1,5 +1,11 @@
 # HSCAP v1 capture bundle format
 
+> **Stable capture schema for experimental sensor-driver research.**
+> HSCAP frame geometry/timing alone is not proof of reduced-height sensor
+> readout: kernel driver revision and V4L2/CSI readout evidence belong in
+> the corresponding qualification artifact.
+> See [project goals](project-goals.md).
+
 HSCAP is the native capture artifact used by `rpi-highspeed-camera`.
 
 The format is intentionally a directory rather than a monolithic container. The raw payload remains byte-for-byte camera data, while geometry, format and timing information are stored separately so a capture can be reconstructed without command-line hints.
