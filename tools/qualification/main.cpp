@@ -1270,7 +1270,10 @@ const Value *resultStats(const Value &result)
 std::optional<std::int64_t> resultBestDurationUs(const Value &result)
 {
     if (const auto *value = result.find("best_frame_duration_us")) {
-        if (!value->isNull()) return value->asInt64();
+        // FPS-search summaries must not advertise the duration of a failed
+        // long validation as their best verified rate.
+        if (value->isNull()) return std::nullopt;
+        return value->asInt64();
     }
     if (const auto *value = result.find("last_frame_duration_us")) {
         if (!value->isNull()) return value->asInt64();
@@ -1286,7 +1289,9 @@ std::optional<std::int64_t> resultBestDurationUs(const Value &result)
 std::optional<double> resultBestFps(const Value &result)
 {
     if (const auto *value = result.find("best_measured_fps")) {
-        if (!value->isNull()) return value->asNumber();
+        // The final_result may still hold evidence from a failed candidate.
+        if (value->isNull()) return std::nullopt;
+        return value->asNumber();
     }
     if (const auto *stats = resultStats(result)) {
         const auto &value = stats->at("measured_fps");
