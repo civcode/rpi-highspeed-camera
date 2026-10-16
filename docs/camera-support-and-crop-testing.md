@@ -8,9 +8,14 @@ The project must not assume that every sensor behaves like IMX296. The high-FPS 
 
 The core rule is:
 
-> Detect capabilities from libcamera, the media graph, and V4L2 at runtime. Use sensor-specific knowledge only as an optional compatibility layer, never as the primary source of truth.
+> Detect current driver capabilities at runtime, then use **explicit,
+> sensor-specific experimental profiles or driver extensions** to safely
+> expose high-speed readouts the stock driver cannot describe. Neither
+> sensor identity nor an experimental profile is proof of achieved FPS.
 
-This allows the project to work with current official Raspberry Pi cameras, upstream-supported third-party sensors, and future cameras without requiring the core architecture to be rewritten.
+The generic library retains common capture, readout evidence and timing
+semantics; distinct official sensors can have distinct kernel-side controls.
+Ordinary advertised modes are compatibility baselines.
 
 ---
 
@@ -200,10 +205,13 @@ public:
 };
 ```
 
-A sensor-specific subclass should not be necessary when the kernel driver correctly exposes the standard media/V4L2 APIs.
+Use the standard V4L2 path where possible. If a stock driver cannot
+express experimental ROI/timing, a **sensor-specific kernel extension** is
+a first-class project deliverable, rather than merely a workaround.
 
 Optional quirks can exist for:
 
+- validated experimental sensor-register/mode profiles and timing constraints;
 - driver-specific ordering requirements;
 - known mode-switch workarounds;
 - link-frequency controls;
@@ -709,24 +717,26 @@ The IMX500 has additional firmware and inference streams. Those should be report
 
 ---
 
-# Implementation milestones
+# Active implementation milestones
 
-1. Generic libcamera camera inventory.
-2. Media-graph association for each camera.
-3. Generic V4L2 subdevice selection inspection.
-4. Advertised-mode benchmark runner.
-5. Single arbitrary-crop probe and result JSON.
-6. TRY-state crop geometry discovery.
-7. Centered crop sweep.
-8. Maximum-stable-FPS search.
-9. Markdown/CSV report generator.
-10. Worker-process isolation and recovery.
-11. All-size sweep.
-12. Optional exhaustive origin + size sweep.
-13. Cross-camera result aggregation.
-14. Optional sensor-specific quirks only where the standard APIs are insufficient.
+The former fixed-mode characterization sequence is largely implemented and
+retained for regression work. The active high-FPS sequence is:
 
-The first usable version should complete steps 1-10 before adding processing plugins or compression experiments.
+1. Classify official camera families and kernel-driver ROI support separately
+   from independently *validated* high-FPS evidence.
+2. Keep experimental register/readout profiles per sensor, versioned and
+   reviewed; do not infer high-FPS from output scaling.
+3. Establish an opt-in kernel driver mode-table port for OV5647 and expose
+   genuinely new reduced-height readouts.
+4. Run exact-size experimental qualifications, preserve timestamp, dropout,
+   driver and board provenance, and refuse stock-mode substitutions.
+5. Extend to dynamic V4L2 ROI/timing only after known-good hardware modes.
+6. Adapt IMX219, IMX708, IMX477 and IMX500 independently; use native
+   IMX296 ROI where supported.
+
+See [active experimental roadmap](experimental-high-fps-roadmap.md).
+The old `hscam-qualify` official-camera manifest remains a baseline
+compatibility tool, not the final high-speed milestone.
 
 ---
 
