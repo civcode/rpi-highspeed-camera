@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "campaign": "ov5647-pi5-pilot-v1",
+  "worker_timeout_ms": 30000,
+  "require_zero_drops": true,
+  "raw_capture": {
+    "representation": "uncompressed",
+    "format": "SBGGR10"
+  },
+  "advertised_modes": {
+    "enabled": true,
+    "duration_ms": 1200
+  },
+  "crop_geometry": {
+    "enabled": true,
+    "verify_cartesian": false,
+    "max_cartesian_checks": 0
+  },
+  "crop_performance": {
+    "enabled": false
+  },
+  "explicit_crops": {
+    "enabled": false,
+    "crops": []
+  },
+  "fps_search": {
+    "enabled": true,
+    "min_frame_duration_us": 100,
+    "max_frame_duration_us": 100000,
+    "short_duration_ms": 1200,
+    "final_duration_ms": 3000,
+    "max_iterations": 9,
+    "tolerance_us": 25,
+    "achieved_ratio": 0.99,
+    "max_interval_ratio": 1.5
+  },
+  "environment": {
+    "require_no_throttling": true
+  },
+  "visual_samples": {
+    "enabled": true,
+    "fastest_frame_count": 32,
+    "playback_fps": 30
+  }
+}
