@@ -96,19 +96,122 @@ the system. The output is a local `ov5647.ko` with module metadata
 `hscam_experimental=ov5647-640x240-rev1-unvalidated`; it is **not**
 installed or loaded. Successful compilation is not successful capture.
 
-## Do not install or test live yet
+## Safe module override: opt-in, reboot-based
 
-The normal driver is in use by the Pi's libcamera camera stack. Do not:
+**User hardware evidence:** the Pi built `ov5647.ko` successfully
+for `6.18.50+rpt-rpi-2712` and `modinfo` reported the experimental
+profile marker. Six host unit tests passed. The compiled module SHA-256
+was `f8a5b3a6a85b5f1da9d31e95716bdef40d0bc0ce4003620f577de16266217777`.
 
-- `insmod` the candidate over the existing bound `ov5647` driver;
-- run `rmmod`/`modprobe -r` while libcamera has the sensor open;
-- copy `ov5647.ko` into the system module tree or invoke `depmod`;
-- write registers over userspace I²C to a kernel-owned sensor.
+The alternative to a live `rmmod`/`insmod` swap is a **staged override**:
 
-The next gate is review of a compiled `modinfo` and matching header
-version, and a **separate opt-in installation/recovery design** before
-live capture. Stock mode behavior must be preserved; exactly one driver
-must bind the sensor at a time.
+1. Keep packaged `/lib/modules/6.18.50+rpt-rpi-2712/kernel/drivers/media/i2c/ov5647.ko.xz` intact.
+2. Copy **only** the checksum-pinned candidate into
+   `/lib/modules/6.18.50+rpt-rpi-2712/updates/hscam/ov5647.ko`.
+3. Refresh the module dependency index with `depmod`.
+4. Verify the module resolver selects the new `.ko` before *any* reboot.
+5. After an explicit reboot, the kernel may load the replacement. Confirm
+   whether the camera actually advertises 640×240 before capture.
+
+The helper intentionally changes neither the current live driver nor the
+boot configuration. **Staging does modify the installed module index and
+changes which driver will be selected after reboot.** If camera-driver
+initialization is early in the boot process or a failing driver destabilizes
+the board, local recovery access may be necessary. It is not a guarantee
+against driver or sensor failure.
+
+### Step 1 — inspect without root
+
+Run from the project root:
+
+```bash
+git pull origin dev
+python3 -m unittest discover -s kernel/tests -v
+bash -n kernel/ov5647/manage-module-override.sh
+bash kernel/ov5647/manage-module-override.sh status
+```
+
+Before staging, the resolver should point at the **stock `.ko.xz`**
+and `Override present: no`. Confirm that SSH/local-console access works,
+that the system is recoverable from external boot media if necessary,
+and that no automatic kernel update is underway.
+
+### Step 2 — explicit optional staging, no reboot
+
+**Only after reviewing the first status output** and deciding the risk
+is acceptable:
+
+```bash
+sudo bash kernel/ov5647/manage-module-override.sh stage
+bash kernel/ov5647/manage-module-override.sh status
+```
+
+The script fails closed unless the running kernel, original packaged
+module, experimental profile metadata and SHA-256 all match. It refuses
+to overwrite an existing override. It checks that the resolver selects
+the staged file and removes the file automatically if resolution fails.
+
+The module remains *stock and loaded* until a subsequent reboot. No live
+`rmmod`, `insmod`, I²C write or camera application is invoked.
+
+You can undo staging **before reboot** using:
+
+```bash
+sudo bash kernel/ov5647/manage-module-override.sh unstage
+```
+
+### Step 3 — controlled test reboot (separate deliberate action)
+
+When you have a known way back into the Pi and have reviewed the staged
+module status, you may **choose** to reboot. The staging script will
+never do this itself.
+
+After the system boots, collect only read-only diagnostics first:
+
+```bash
+uname -r
+bash kernel/ov5647/manage-module-override.sh status
+modinfo -F hscam_experimental /lib/modules/$(uname -r)/updates/hscam/ov5647.ko
+build/hscam-inspect --json
+build/hscam-highspeed --json
+```
+
+A selected on-disk module path is **not sufficient evidence** that the
+experimental module is currently bound. Inspect the live OV5647 I²C
+binding, and require the new *sensor* 640×240 mode to appear in
+`hscam-inspect` and `hscam-highspeed`. Only then proceed to
+low-rate RAW capture and subsequently isolated high-FPS probes. If the
+camera is missing, kernel logs and media topology should be reviewed.
+Do not immediately run a 179 FPS stress test.
+
+### Step 4 — rollback
+
+If the experiment fails, or you wish to stop testing:
+
+```bash
+sudo bash kernel/ov5647/manage-module-override.sh unstage
+bash kernel/ov5647/manage-module-override.sh status
+# Reboot separately to restore the packaged stock module.
+```
+
+The unstage command removes **only** the file whose checksum matches
+this experiment; it never touches the packaged stock `.ko.xz`.
+It runs `depmod` and checks the resolver again. If a replacement is
+currently loaded, removing its file does not unload it: the stock driver
+is used only **after reboot**.
+
+If the Pi is inaccessible after reboot, recover using independent
+boot/root filesystem access to remove the override and rebuild the
+module dependency index. Do not assume a broken camera driver can
+always be corrected over SSH.
+
+### Conflicts to avoid
+
+- Never load two `ov5647` drivers simultaneously.
+- Never force-unload an in-use camera driver.
+- Never replace the stock package-managed module file.
+- Never use userspace I²C register writes while the kernel driver owns it.
+- Never interpret predicted 178.96 FPS as a measurement.
 
 See [kernel integration](../../docs/kernel-driver-integration.md) and
 [H5 acceptance criteria](../../docs/experimental-high-fps-roadmap.md).
