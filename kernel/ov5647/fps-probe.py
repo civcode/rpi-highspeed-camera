@@ -24,7 +24,7 @@ SUMMARY_RE = re.compile(
     r"\bframes=(\d+)\s+gaps=(\d+)\s+overruns=(\d+)(?:\s+fps=([\d.]+))?"
 )
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-TAG_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,39}\\Z")
+TAG_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,39}\Z")
 
 
 def validate_exposure(fps: int, exposure_us: int) -> int:
