@@ -4,6 +4,19 @@ This project has not published its first stable release yet.
 
 ## 0.1.0-dev — unreleased
 
+### Experimental high-FPS recharter (dev)
+
+- Replaced the active stock-mode-first goal with kernel sensor-readout
+  experimentation and C++20 classification/evaluation.
+- Added public high-FPS strategy classification for six official sensor
+  families, without claiming reference FPS as hardware-validated.
+- Added read-only `hscam-highspeed` inventory, host tests, an experimental
+  readout-only OV5647 qualification manifest and exact-mode matching.
+- Added kernel driver integration, conflict/rollback architecture, and
+  milestone-based experimental development plan.
+- **Pending:** the actual OV5647 kernel mode-table extensions and verified
+  reduced-height FPS measurements on Pi 5, then other official sensors.
+
 ### Capture core
 
 - Added a C++20 `libhscam` API for camera discovery, configuration and
