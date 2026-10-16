@@ -5,6 +5,7 @@
 #include "crop_geometry.hpp"
 #include "visual_samples.hpp"
 #include "raw_capture.hpp"
+#include "fps_search.hpp"
 #include "promote.hpp"
 
 #include <algorithm>
@@ -981,42 +982,6 @@ bool verifyRecovery(const fs::path &executable, const fs::path &output,
 
 Value timeoutResult(const TestCase &test);
 
-bool probeStable(const Value &result, std::int64_t requestedUs,
-                 double achievedRatio, std::uint64_t toleranceUs,
-                 double maxIntervalRatio)
-{
-    if (result.at("status").asString() != "pass")
-        return false;
-    const auto *stats = result.find("stats");
-    if (!stats || stats->at("measured_fps").isNull())
-        return false;
-
-    const double requestedFps = 1000000.0 / static_cast<double>(requestedUs);
-    if (stats->at("measured_fps").asNumber() < requestedFps * achievedRatio)
-        return false;
-
-    if (const auto *maxInterval = stats->find("max_interval_ns")) {
-        if (!maxInterval->isNull()) {
-            const double allowedNs =
-                static_cast<double>(requestedUs) * 1000.0 * maxIntervalRatio;
-            if (static_cast<double>(maxInterval->asInt64()) > allowedNs)
-                return false;
-        }
-    }
-
-    if (const auto *duration = result.find("last_frame_duration_us")) {
-        if (!duration->isNull()) {
-            const auto delivered = duration->asInt64();
-            const auto allowed = requestedUs + static_cast<std::int64_t>(
-                std::max<std::uint64_t>(toleranceUs,
-                    static_cast<std::uint64_t>(requestedUs * (1.0 - achievedRatio))));
-            if (delivered > allowed)
-                return false;
-        }
-    }
-    return true;
-}
-
 Value runProbe(const fs::path &executable, const fs::path &output,
                const TestCase &base, std::int64_t frameDurationUs,
                std::uint64_t durationMs, std::uint64_t workerTimeoutMs,
@@ -1058,29 +1023,34 @@ Value runFpsSearch(const fs::path &executable, const fs::path &output,
 {
     struct ProbeSummary {
         std::int64_t durationUs{};
+        std::uint64_t durationMs{};
         bool stable{};
         double measuredFps{};
         std::string status;
+        std::vector<std::string> rejectionReasons;
     };
 
     std::vector<ProbeSummary> probes;
     auto probe = [&](std::int64_t durationUs, std::uint64_t durationMs) {
         const Value result = runProbe(executable, output, base, durationUs, durationMs,
                                       policy.workerTimeoutMs, rerun);
-        const bool stable = probeStable(result, durationUs, policy.fpsAchievedRatio,
-                                        policy.fpsToleranceUs,
-                                        policy.fpsMaxIntervalRatio);
+        const auto assessment = hscam::qualification::assessFpsProbe(
+            result, durationUs, policy.fpsAchievedRatio, policy.fpsToleranceUs,
+            policy.fpsMaxIntervalRatio);
         double fps{};
         if (const auto *stats = result.find("stats")) {
-            if (!stats->at("measured_fps").isNull())
-                fps = stats->at("measured_fps").asNumber();
+            if (const auto *measured = stats->find("measured_fps");
+                measured && !measured->isNull())
+                fps = measured->asNumber();
         }
-        probes.push_back({durationUs, stable, fps, result.at("status").asString()});
-        return std::pair<Value, bool>{result, stable};
+        probes.push_back({durationUs, durationMs, assessment.stable(), fps,
+                          result.at("status").asString(), assessment.reasons});
+        return std::pair<Value, bool>{result, assessment.stable()};
     };
 
     auto [slowResult, slowStable] =
         probe(policy.fpsMaxFrameDurationUs, policy.fpsShortDurationMs);
+    (void)slowResult;
 
     Value::Object summary;
     summary["case_id"] = base.id;
@@ -1096,6 +1066,7 @@ Value runFpsSearch(const fs::path &executable, const fs::path &output,
 
         auto [fastResult, fastStable] =
             probe(policy.fpsMinFrameDurationUs, policy.fpsShortDurationMs);
+        (void)fastResult;
         if (fastStable) {
             stableUs = policy.fpsMinFrameDurationUs;
         } else {
@@ -1112,30 +1083,79 @@ Value runFpsSearch(const fs::path &executable, const fs::path &output,
             }
         }
 
-        auto [finalResult, finalStable] =
-            probe(stableUs, policy.fpsFinalDurationMs);
+        // Short measurements are only candidates; a full-length validation
+        // near the sensor limit can reveal occasional frame intervals that
+        // the short run missed. Retry the already-short-stable slower choices
+        // rather than incorrectly rejecting an otherwise supported mode.
+        std::vector<std::pair<std::int64_t, bool>> shortProbes;
+        for (const auto &sample : probes) {
+            if (sample.durationMs == policy.fpsShortDurationMs)
+                shortProbes.emplace_back(sample.durationUs, sample.stable);
+        }
+        const auto finalCandidates =
+            hscam::qualification::fpsFinalCandidates(shortProbes);
 
+        Value::Array validations;
+        Value finalResult(nullptr);
+        bool finalStable{};
+        std::int64_t validatedUs{};
+        for (const auto candidateUs : finalCandidates) {
+            auto [tested, stable] = probe(candidateUs, policy.fpsFinalDurationMs);
+            Value::Array reasons;
+            for (const auto &reason : probes.back().rejectionReasons)
+                reasons.emplace_back(reason);
+            validations.emplace_back(Value::Object{
+                {"frame_duration_us", candidateUs},
+                {"stable", stable},
+                {"worker_status", tested.at("status").asString()},
+                {"rejection_reasons", std::move(reasons)}
+            });
+            finalResult = std::move(tested);
+            if (stable) {
+                finalStable = true;
+                validatedUs = candidateUs;
+                break;
+            }
+        }
+
+        summary["initial_candidate_us"] = stableUs;
+        summary["final_validations"] = std::move(validations);
         summary["status"] = finalStable ? "pass" : "unstable";
         summary["error"] = finalStable ? Value(nullptr)
-                                        : Value("final validation failed at discovered boundary");
-        summary["best_frame_duration_us"] = stableUs;
-        const auto *finalStats = finalResult.find("stats");
-        if (finalStats && !finalStats->at("measured_fps").isNull()) {
-            summary["best_measured_fps"] = finalStats->at("measured_fps").asNumber();
-            summary["stats"] = *finalStats;
+                                        : Value("no full-duration FPS validation passed");
+        summary["best_frame_duration_us"] =
+            finalStable ? Value(validatedUs) : Value(nullptr);
+        if (finalStable) {
+            const auto *finalStats = finalResult.find("stats");
+            if (finalStats) {
+                if (const auto *measured = finalStats->find("measured_fps");
+                    measured && !measured->isNull()) {
+                    summary["best_measured_fps"] = measured->asNumber();
+                    summary["stats"] = *finalStats;
+                } else {
+                    summary["best_measured_fps"] = nullptr;
+                }
+            } else {
+                summary["best_measured_fps"] = nullptr;
+            }
         } else {
             summary["best_measured_fps"] = nullptr;
         }
-        summary["final_result"] = finalResult;
+        summary["final_result"] = std::move(finalResult);
     }
 
     Value::Array probeValues;
     for (const auto &p : probes) {
+        Value::Array reasons;
+        for (const auto &reason : p.rejectionReasons)
+            reasons.emplace_back(reason);
         probeValues.emplace_back(Value::Object{
             {"frame_duration_us", p.durationUs},
+            {"duration_ms", p.durationMs},
             {"stable", p.stable},
             {"measured_fps", p.measuredFps ? Value(p.measuredFps) : Value(nullptr)},
-            {"worker_status", p.status}
+            {"worker_status", p.status},
+            {"rejection_reasons", std::move(reasons)}
         });
     }
     summary["probes"] = std::move(probeValues);
