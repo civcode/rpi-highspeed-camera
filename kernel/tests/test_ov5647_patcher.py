@@ -90,6 +90,20 @@ class PatcherTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "four stock"):
             patcher.patch_driver(fixture)
 
+    def test_kernel_shell_helpers_parse(self):
+        # A previous compile-only helper successfully built the module but
+        # failed later on a multiline Bash [[ ... == ... ]] expression.
+        # Syntax checks need no Pi hardware and must cover the build helper.
+        helper = SCRIPT.parent / "build-experimental-module.sh"
+        result = subprocess.run(
+            ["bash", "-n", str(helper)],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(
+            result.returncode, 0,
+            f"{helper} has a Bash syntax error: {result.stderr}",
+        )
+
     def test_refuses_wrong_checksum_without_writing(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
