@@ -16,9 +16,11 @@ usage() {
     cat <<'EOF'
 usage:
   bash kernel/ov5647/manage-module-override.sh status
+  bash kernel/ov5647/manage-module-override.sh check
   sudo bash kernel/ov5647/manage-module-override.sh stage
   sudo bash kernel/ov5647/manage-module-override.sh unstage
 
+check: read-only preflight of pinned module, stock driver, and resolver.
 stage/unstage only modify an OV5647 module file and depmod index.
 They NEVER unload/reload live drivers, modify boot files, or reboot.
 A separate explicit reboot is needed to select a staged driver.
@@ -87,6 +89,25 @@ status() {
     printf 'Resolver selection is not proof of which driver is currently loaded.\n'
 }
 
+check() {
+    require_pinned_kernel
+    verify_candidate
+    [[ ! -e "$OVERRIDE" && ! -L "$OVERRIDE" ]] ||
+        fail "Override path already exists; use status or unstage"
+    local chosen
+    chosen=$(selected_module)
+    [[ -n "$chosen" && "$(readlink -f "$chosen")" == "$(readlink -f "$STOCK")" ]] ||
+        fail "Resolver does not select packaged stock module: $chosen"
+    [[ -L /sys/bus/i2c/devices/10-0036/driver ]] ||
+        fail "OV5647 I2C device does not currently have a driver bound"
+    [[ "$(basename "$(readlink -f /sys/bus/i2c/devices/10-0036/driver)")" == "ov5647" ]] ||
+        fail "Unexpected I2C device driver bound"
+    printf 'READ-ONLY PREFLIGHT PASSED\n'
+    printf 'Kernel: %s\nStock module: %s\nCandidate: %s\n' "$KERNEL" "$STOCK" "$CANDIDATE"
+    printf 'Candidate SHA256: %s\n' "$(checksum "$CANDIDATE")"
+    printf 'Nothing installed, loaded, unloaded or rebooted.\n'
+}
+
 reindex() { depmod -a "$KERNEL"; }
 restore_index_after_failed_stage() {
     rm -f -- "$OVERRIDE"
@@ -145,6 +166,7 @@ if [[ "$#" -ge 1 ]]; then action="$1"; fi
 [[ "$#" -le 1 ]] || { usage >&2; exit 2; }
 case "$action" in
 status) status ;;
+check) check ;;
 stage) stage ;;
 unstage) unstage ;;
 --help|-h|help) usage ;;
