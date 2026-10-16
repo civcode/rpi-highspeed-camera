@@ -1,5 +1,11 @@
 # Official qualification results
 
+> **Historical baseline data repository.** Ordinary advertised-mode results
+> are regression evidence, not the new project's experimental high-FPS
+> completion criteria. Experimental result publication additionally requires
+> sensor-driver revision, actual readout evidence and timing/image validation.
+> See [active roadmap](../../docs/experimental-high-fps-roadmap.md).
+
 This directory is reserved for **promoted reference results** from the official Raspberry Pi camera qualification campaign.
 
 Do not place in-progress runs here. Working output belongs under `qualification/work/`.
