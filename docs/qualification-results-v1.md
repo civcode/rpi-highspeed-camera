@@ -4,7 +4,20 @@ The official-camera qualification runner writes a directory of versioned machine
 
 This document describes the **v1 qualification output contract** used by `hscam-qualify`.
 
-The campaign is designed for the one-time official Raspberry Pi camera characterization effort. It is not a general benchmark service.
+The v1 schema is retained for legacy baseline campaigns **and repeated
+experimental high-FPS driver qualification**. A passing ordinary stock-mode
+capture is a compatibility baseline, never proof of a sensor readout hack.
+
+An optional top-level `experimental_readouts` array in a manifest contains
+exact `{"width":640,"height":128}`-style sensor readout targets.
+The runner benchmarks only identically sized libcamera-advertised sensor
+modes; if the running driver exposes none, the plan fails before capture,
+rather than silently testing an ordinary mode. Experimental candidates use
+`experiment-mode-` case IDs; **size matching alone does not attest that a
+driver was modified or that the true sensor readout matches that size**.
+Retain driver and CSI metadata for hardware publication.
+
+See [goals](project-goals.md) and [experimental roadmap](experimental-high-fps-roadmap.md).
 
 ## Canonical run
 
