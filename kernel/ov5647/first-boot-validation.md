@@ -365,6 +365,64 @@ log before interpreting its image.
 imaging is not. Continue to block 90+ FPS tests until a clear
 comparison frame passes the image-quality gate.**
 
+## Stock 640×480 frame is also black (follow-up)
+
+The experiment owner reported that
+`ov5647-stock-vga-reference-8ms-g4-frame30.png` is also black.
+That is the **stock 640×480 sensor mode still preserved inside the
+experimental OV5647 module**, not a capture using the separately packaged
+stock `ov5647.ko.xz`. Therefore, this finding does not isolate the
+experimental kernel module as a whole, but it makes the 640×240
+height/window registers a less likely **sole cause**.
+
+Before changing any registers or trying 90 FPS:
+
+1. Inspect the **numerical RAW statistics** of the stock VGA HSCAP.
+   Compare `p50` and `p95` with the experimental RAW10 values
+   15 and 22 (8 ms, gain 4). The PNG being black alone does not tell
+   us whether the two RAW frames have comparable signal values.
+2. Capture one normal **auto-exposed ISP JPEG** and the associated
+   full-resolution DNG through Raspberry Pi's independent
+   `rpicam-still` application. This tests whether normal automatic
+   exposure and ISP processing recover an image, without changing the
+   kernel module or raw experiment bundles. Keep the lens uncovered
+   and point at an evenly lit, detailed scene.
+
+```bash
+build/hscam-export stats \
+  qualification/work/ov5647-stock-vga-reference-8ms-g4.hscap \
+  --frame 30
+
+command -v rpicam-still
+rpicam-still --nopreview --timeout 3000 --raw \
+  --output qualification/work/ov5647-auto-control.jpg
+```
+
+Raspberry Pi OS `rpicam-still --raw` writes an ordinary processed
+JPEG and companion sensor DNG. Do not request 60 FPS or manually fix
+exposure in this test: allow auto-exposure to settle.
+
+Interpret the comparison:
+
+- **JPEG bright, HSCAP RAW nearly zero:** investigate manual
+  exposure/analogue gain control, signal-level black calibration, or
+  whether the HSCAP RAW capture pipeline is interpreting all planes
+  correctly; DNG provides a second independent raw decode baseline.
+- **JPEG also black:** check lighting, sensor lens/cover, and whether
+  the camera is physically seeing the scene. If these are known good,
+  rollback to the **actual packaged stock module** and reboot before
+  diagnosing the experimental driver further.
+- **JPEG bright and DNG normal, but HSCAP RAW nearly zero:** directly
+  compare raw source word distributions and control metadata. The
+  Raspberry Pi 5 CFE correctly shifts 10-bit sensor samples left by
+  six into 16-bit containers (per Raspberry Pi engineers), matching
+  the existing `hscam-export` decoder's design. Do not invert that
+  alignment without frame-level evidence.
+
+Retain the first 640×240 and stock VGA HSCAP samples. Do not
+change the driver or run a high-FPS ramp to conceal a near-black
+data path.
+
 ## 6. Rollback if camera streaming fails
 
 The working stock module is preserved at:
