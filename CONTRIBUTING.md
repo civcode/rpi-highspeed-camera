@@ -1,9 +1,11 @@
 # Contributing
 
-The project is pre-1.0 and still completing its first physical Raspberry Pi
-qualification campaign. Changes should preserve the distinction between the
-capture library, offline rendering/export, and the one-time qualification
-protocol.
+The project is pre-1.0. Its primary goal is experimental high-frame-rate
+sensor readout, implemented through optional kernel driver extensions (C),
+a generic C++20 capture/strategy API, and independently verified hardware
+qualification. Preserve the distinction between capture, sensor-driver
+ownership and offline evidence. See [goals](docs/project-goals.md) and the
+[active roadmap](docs/experimental-high-fps-roadmap.md).
 
 ## Development workflow
 
@@ -45,6 +47,22 @@ cmake -S . -B build \
 ```
 
 Then build and run CTest locally.
+
+## Kernel and sensor experiment rules
+
+- Keep one kernel sensor driver bound to a physical I²C sensor at a time.
+- Prefer an opt-in alternate kernel/driver configuration with known-good
+  stock rollback; never auto-install or overwrite boot images.
+- Pin the exact base kernel revision for every experimental driver patch.
+- Do not issue userspace I²C writes against a sensor owned by the kernel.
+- Preserve coherent V4L2 sensor geometry, CSI format, pixel/link rate,
+  blanking, exposure and power-management state.
+- Review sensor-specific constraints and register tables; never search
+  arbitrary undocumented register addresses by brute force.
+- Host tests validate planning but **never certify** hardware FPS. Experimental
+  reports require full timing traces, original readout evidence and images.
+- Stock advertised-mode tests are regressions, not experimental achievements.
+- Keep driver patches distinct from normal capture library changes.
 
 ## Capture-path rules
 
