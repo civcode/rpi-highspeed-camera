@@ -700,20 +700,36 @@ int workerMain(const fs::path &casePath, const fs::path &resultPath)
             }
         }
 
+        // Snapshot measurement statistics while capture is still running.
+        // camera->stop() cancels queued libcamera requests as part of normal
+        // shutdown; counting those as in-run dropped frames makes every
+        // otherwise clean FPS probe falsely "unstable".
+        const auto stats = session.stats();
         session.stop();
         writeTimingTrace(resultPath, timingSamples);
         result["timing_trace"] = timingTracePath(resultPath).filename().string();
-        const auto stats = session.stats();
         result["stats"] = statsValue(stats);
         result["frames_consumed"] = consumed;
         result["last_frame_duration_us"] = lastFrameDurationUs ? Value(*lastFrameDurationUs) : Value(nullptr);
         result["first_sensor_timestamp_ns"] = firstSensorTimestampNs ? Value(*firstSensorTimestampNs) : Value(nullptr);
         result["last_sensor_timestamp_ns"] = lastSensorTimestampNs ? Value(*lastSensorTimestampNs) : Value(nullptr);
 
-        const bool clean = stats.requestsCancelled == 0 &&
-                           stats.sequenceGaps == 0 &&
-                           stats.completedQueueOverruns == 0 &&
-                           consumed > 0;
+        Value::Array stabilityFailures;
+        if (stats.requestsCancelled != 0)
+            stabilityFailures.emplace_back("requests_cancelled_during_capture");
+        if (stats.sequenceGaps != 0)
+            stabilityFailures.emplace_back("sequence_gaps");
+        if (stats.completedQueueOverruns != 0)
+            stabilityFailures.emplace_back("queue_overruns");
+        if (consumed == 0)
+            stabilityFailures.emplace_back("no_frames_consumed");
+        if (std::any_of(timingSamples.begin(), timingSamples.end(),
+                        [](const TimingSample &sample) {
+                            return sample.status != hscam::FrameStatus::Complete;
+                        }))
+            stabilityFailures.emplace_back("incomplete_frames");
+        const bool clean = stabilityFailures.empty();
+        result["stability_failures"] = Value(std::move(stabilityFailures));
         result["status"] = clean || !test.requireZeroDrops ? "pass" : "unstable";
         result["error"] = nullptr;
     } catch (const std::exception &e) {
