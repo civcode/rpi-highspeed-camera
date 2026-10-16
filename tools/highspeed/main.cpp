@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace {
 using hscam::internal::json::Value;
@@ -29,6 +30,7 @@ Value toJson(const hscam::CameraInfo &camera)
         {"official_sensor", assessment.officialSensor},
         {"strategy", hscam::highspeedStrategyName(assessment.strategy)},
         {"native_roi_advertised", assessment.nativeRoiAdvertised},
+        {"reference_modes_advertised", assessment.referenceModesAdvertised},
         {"requires_driver_extension", assessment.requiresDriverExtension},
         {"experimentally_validated", false},
         {"reference_readouts", std::move(targets)}
