@@ -1,12 +1,19 @@
 # C++ library: first implementation concept
 
+> **Architecture update:** this document describes the established capture-core
+> implementation, not the overall current research scope. The active project
+> mission includes experimental sensor drivers (C), high-speed strategy
+> classification (C++), and experimental readout qualification. See
+> [goals](project-goals.md) and [roadmap](experimental-high-fps-roadmap.md).
+
 ## Status
 
 This document defines the first implementation of the production C++ library for `rpi-highspeed-camera`.
 
 The first implementation is intentionally small. Its job is to make Raspberry Pi camera capture understandable, deterministic, and measurable while exposing the sensor-level controls needed for high-frame-rate work.
 
-It is **not** the one-time official-camera qualification harness, and it is not initially a computer-vision framework. Qualification is a separate consumer of this library rather than part of its runtime API.
+The capture library is distinct from the experimental qualification harness;
+neither is intended as a general computer-vision framework. Qualification is a separate consumer of this library rather than part of its runtime API.
 
 The first vertical slice should do this reliably:
 
