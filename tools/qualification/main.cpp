@@ -649,6 +649,24 @@ int workerMain(const fs::path &casePath, const fs::path &resultPath)
 
         const auto configuration = camera.configure(request);
         hscam::qualification::verifyRawCaptureSelection(request, configuration, false);
+        // A mode benchmark must not silently time a different sensor/readout
+        // size just because libcamera's negotiation policy allowed adjustments.
+        if (test.modeId) {
+            const auto cameras = context.cameras();
+            const auto foundCamera = std::find_if(cameras.begin(), cameras.end(),
+                [&](const hscam::CameraInfo &info) { return info.id == test.cameraId; });
+            if (foundCamera == cameras.end())
+                throw hscam::NegotiationFailed("camera disappeared during qualification");
+            const auto foundMode = std::find_if(foundCamera->sensorModes.begin(),
+                foundCamera->sensorModes.end(),
+                [&](const hscam::SensorMode &mode) { return mode.id == *test.modeId; });
+            if (foundMode == foundCamera->sensorModes.end())
+                throw hscam::NegotiationFailed("requested sensor mode disappeared during qualification");
+            if (configuration.stream.size.width != foundMode->size.width ||
+                configuration.stream.size.height != foundMode->size.height)
+                throw hscam::NegotiationFailed(
+                    "advertised sensor mode negotiated an unexpected stream size");
+        }
         result["configuration"] = captureConfigurationValue(configuration);
 
         auto session = camera.start();
