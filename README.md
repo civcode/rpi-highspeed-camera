@@ -46,6 +46,23 @@ The strategy API, read-only discovery command and fail-closed planner
 are software foundations; the driver must still be ported, built and
 measured on hardware. See milestones H5–H9 in the active roadmap.
 
+## First experimental OV5647 mode on Pi 5
+
+A compiled experimental OV5647 module successfully loaded on the Pi 5
+running `6.18.50+rpt-rpi-2712` and exposed **640×240** as a fifth
+libcamera sensor mode. This does **not yet** prove valid RAW capture or
+the target FPS. See the
+[first-boot RAW validation checklist](kernel/ov5647/first-boot-validation.md).
+
+If `build/hscam-inspect` exists but `build/hscam-highspeed` is missing,
+reconfigure and build the new userspace target:
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DHSCAM_REQUIRE_LIBCAMERA=ON
+cmake --build build --target hscam-highspeed hscam-capture hscam-export -j2
+build/hscam-highspeed --json
+```
+
 ## Existing capture and baseline tooling (v0.1 lineage)
 
 
