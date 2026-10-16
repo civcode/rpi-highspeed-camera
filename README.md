@@ -188,6 +188,20 @@ build/hscam-qualify run \
   --output qualification/work/imx296
 ```
 
+For an initial **Raspberry Pi 5 + OV5647** validation, use the smaller pilot
+before the exhaustive official campaign. It requests `SBGGR10` unpacked
+Bayer so PiSP's default COMP1 encoding does not prevent PNG/video evidence:
+
+```bash
+build/hscam-qualify run \
+  qualification/manifests/ov5647-pi5-pilot-v1.json \
+  --output qualification/work/ov5647-pi5-pilot
+```
+
+See [qualification RAW capture policy](docs/qualification-raw-policy.md) for
+`raw_capture` manifest options, limitations and the distinction between a
+pilot and an official result.
+
 The campaign is intentionally much more rigorous than an interactive benchmark. It:
 
 - fingerprints the board, OS, kernel, libcamera version and source revision;
