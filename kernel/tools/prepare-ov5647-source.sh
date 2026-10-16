@@ -27,20 +27,32 @@ cd "$OUT"
 printf '%s\n' "# hscam OV5647 kernel source preparation"
 printf 'running kernel: %s\nsource package: %s=%s\noutput: %s\n'     "$KERNEL_RELEASE" "$PKG" "$SOURCE_VERSION" "$OUT"
 
-if [[ ! -f "${PKG}_${SOURCE_VERSION}_all.deb" ]]; then
+# Debian APT percent-encodes a package epoch in the downloaded filename.
+# For example: linux-source-6.18_1%3a6.18.50-1+rpt1_all.deb.
+# Never assume that filename omits the epoch; validate the DEB's own Version
+# field, and reuse the already-downloaded file rather than fetching 160 MB again.
+find_pinned_deb() {
+    local candidate declared_version
+    for candidate in "${PKG}_"*.deb; do
+        [[ -f "$candidate" ]] || continue
+        declared_version=$(dpkg-deb --field "$candidate" Version 2>/dev/null) || continue
+        if [[ "$declared_version" == "$APT_VERSION" ]]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+if ! deb=$(find_pinned_deb); then
     printf '\nDownloading pinned source package (no root privileges)...\n'
-    # Debian kernel packages may have a 1: epoch; omitted from .deb filename.
     apt download "${PKG}=${APT_VERSION}" ||
-        apt download "${PKG}=${SOURCE_VERSION}" ||
-        fail "Exact source version not in configured apt indexes. Check apt-cache policy $PKG. Do not substitute latest."
+        fail "Exact source version unavailable. Check apt-cache policy $PKG; do not substitute latest."
+    deb=$(find_pinned_deb) ||
+        fail "Downloaded package missing or its internal Version differs from $APT_VERSION"
 fi
 
-deb="${PKG}_${SOURCE_VERSION}_all.deb"
-declared_version=$(dpkg-deb --field "$deb" Version)
-if [[ "$declared_version" != "$APT_VERSION" &&
-      "$declared_version" != "$SOURCE_VERSION" ]]; then
-    fail "Downloaded package reports $declared_version; expected $SOURCE_VERSION"
-fi
+printf 'Using verified source package: %s\n' "$deb"
 dpkg-deb -x "$deb" "$OUT/deb-extract"
 archive="$OUT/deb-extract/usr/src/linux-source-6.18.tar.xz"
 [[ -f "$archive" ]] ||
