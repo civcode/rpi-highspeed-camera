@@ -11,6 +11,7 @@ namespace hscam {
 // Experimental register profiles and measured FPS are validated separately.
 enum class HighspeedStrategy {
     NativeSensorRoi,
+    ExperimentalModesAdvertised,
     DriverExtensionRequired,
     Uncharacterized
 };
@@ -25,6 +26,7 @@ struct HighspeedAssessment {
     bool officialSensor{};
     HighspeedStrategy strategy{HighspeedStrategy::Uncharacterized};
     bool nativeRoiAdvertised{};
+    bool referenceModesAdvertised{};
     bool requiresDriverExtension{};
     bool experimentallyValidated{}; // always false until actual evidence is checked
     std::vector<ExperimentalReadout> referenceReadouts;
