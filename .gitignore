@@ -3,3 +3,4 @@
 *.hscap/
 qualification/work/
 kernel/work/
+/kernel-preflight.txt
