@@ -28,13 +28,17 @@ make -C "$HEADERS" "M=$WORK" modules
 MODULE="$WORK/ov5647.ko"
 [[ -f "$MODULE" ]] || fail "Build did not produce $MODULE"
 if command -v modinfo >/dev/null 2>&1; then
-    ACTUAL=$(modinfo -F vermagic "$MODULE")
+    ACTUAL=$(modinfo -F vermagic "$MODULE") ||
+        fail "Could not read compiled module vermagic."
     printf 'Module vermagic: %s\n' "$ACTUAL"
-    [[ "$ACTUAL" == "$KERNEL "* ]] ||
+    # The kernel release is the first whitespace-delimited vermagic field.
+    [[ "${ACTUAL%% *}" == "$KERNEL" ]] ||
         fail "Module vermagic does not match the running kernel; do not install."
-    [[ "$(modinfo -F hscam_experimental "$MODULE")" ==
-       "ov5647-640x240-rev1-unvalidated" ]] ||
+    PROFILE=$(modinfo -F hscam_experimental "$MODULE") ||
+        fail "Could not read experimental module marker."
+    [[ "$PROFILE" == "ov5647-640x240-rev1-unvalidated" ]] ||
         fail "Module metadata mismatch; do not install."
+    printf 'Experimental profile: %s\n' "$PROFILE"
 fi
 printf 'Compiled candidate: %s\n' "$MODULE"
 sha256sum "$MODULE"
