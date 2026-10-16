@@ -96,6 +96,16 @@ the system. The output is a local `ov5647.ko` with module metadata
 `hscam_experimental=ov5647-640x240-rev1-unvalidated`; it is **not**
 installed or loaded. Successful compilation is not successful capture.
 
+## Pi 5 experimental boot observed
+
+The experimental module was successfully staged and activated on the
+Raspberry Pi 5 on 2026-10-16. libcamera enumerated a fifth OV5647 mode,
+`640×240-SGBRG10_CSI2P`, with mode ID `3fc920b29f2defb0`.
+**No actual 640×240 RAW frame or high-FPS measurement has been recorded
+yet.** See the [first-boot RAW validation procedure](first-boot-validation.md)
+for CMake rebuilding (`hscam-highspeed` was missing), initial 30-FPS
+capture, preview and rollback.
+
 ## Safe module override: opt-in, reboot-based
 
 **User hardware evidence:** the Pi built `ov5647.ko` successfully
