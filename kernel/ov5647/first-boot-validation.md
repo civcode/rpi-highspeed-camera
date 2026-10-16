@@ -12,8 +12,9 @@ the fifth, new sensor mode **640×240 RAW10**:
   `3fc920b29f2defb0`
 - the existing 640×480, 1296×972, 1920×1080, and 2592×1944 modes
   remained enumerated;
-- libcamera accepted sensor-mode *discovery* but **no RAW frames or FPS
-  have been validated**.
+- after that discovery, the sensor delivered **32 actual 640×240 RAW
+  frames** at measured **29.8551 FPS**, with no reported gaps/overruns;
+  60+ FPS capability and full visual validity remain unverified.
 
 `hscam-inspect` reported `sensor_subdevice: null` and crop capability
 flags false, despite a V4L2 OV5647 subdevice being present. This is a
