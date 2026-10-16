@@ -55,7 +55,10 @@ Distinguish **capability discovery** from **hardware proof**:
 - `native_roi_available`: current driver advertises mutable sensor ROI;
   geometry/FPS still need verification.
 - `requires_driver_extension`: a known official family without mutable ROI
-  exposed by the running driver. Historical register profiles are *candidates*.
+  or recognized experimental-sized modes advertised by the running driver.
+- `experimental_modes_advertised`: exact historical/reference readout-sized
+  modes appear in the driver's enumeration. Their presence is **not** proof
+  of a driver modification, actual sensor readout or achieved FPS.
 - `uncharacterized`: no validated strategy known for this detected sensor.
 - `experimentally_validated`: can be claimed only for a particular
   kernel/module revision, sensor, board, readout configuration, RAW encoding,
