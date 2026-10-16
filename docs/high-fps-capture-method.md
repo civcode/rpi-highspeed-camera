@@ -12,7 +12,10 @@ See [Camera support and automated crop testing](camera-support-and-crop-testing.
 
 ## Goal
 
-Build a sensor-agnostic C++ capture library/application, with optional Python bindings, that characterizes and uses the fastest stable capture configurations exposed by the modern libcamera, media-controller, and V4L2 stack.
+Build a sensor-agnostic C++20 capture/measurement library and **sensor-specific
+high-FPS experimentation interfaces**, with opt-in kernel-driver extensions to
+expose sensor register/readout configurations the stock stack does not offer.
+Normal libcamera modes are regression checks, not the research endpoint.
 
 For cameras that support a mutable **sensor readout window**, reduce sensor readout to increase frame rate. For cameras that only expose predefined sensor modes, enumerate and benchmark those modes rather than pretending that an ISP/scaler crop is equivalent to a sensor crop.
 
@@ -477,69 +480,31 @@ That work is historically important because it shows the same basic principle: r
 
 Forum experiments have also pushed IMX708 above its standard advertised video rates by changing driver sensor modes. Examples include approximately 196 fps at 1536x512 and experimental higher-rate modes with more invasive driver modification.
 
-This reinforces the general sensor-timing principle, but those modes require sensor-driver changes and are outside the initial scope of this IMX296 project.
+This reinforces the project's **new primary direction**: experimentally
+extended kernel sensor drivers are in scope and essential for cameras that
+lack mutable V4L2 sensor ROI.
 
 ---
 
-## Initial project scope
+## Current high-FPS implementation scope
 
-### In scope
+The project no longer stops at available stock sensor modes. Its core scope
+includes **experimental driver mode tables, validated ROI/timing controls,
+and native C++ automated classification**, for all six official camera
+families. The system must preserve normal driver behavior as a rollback
+baseline, but stock-mode FPS claims do not complete the research goal.
 
-- every camera exposed successfully through Raspberry Pi's libcamera stack;
-- official OV5647, IMX219, IMX708, IMX477, IMX296, and IMX500 families;
-- upstream-supported third-party sensors where the standard media/V4L2 interfaces are usable;
-- generic camera/mode/crop capability discovery;
-- fixed sensor-mode benchmarking;
-- arbitrary sensor-crop probing where supported by the driver;
-- automated crop sweeps and maximum-stable-FPS measurement;
-- machine-readable JSON results plus CSV/Markdown reports;
-- libcamera C++ capture;
-- high-rate request/buffer handling;
-- timestamp and frame-skip validation;
-- raw Bayer and/or processed capture;
-- RAM ring buffering;
-- pluggable processing stages;
-- storage throughput measurement;
-- optional Python bindings.
+**Sensor-specific work is mandatory where standard V4L2 interfaces are
+insufficient.** Historical `raspiraw` register profiles are reference
+material; its MMAL pipeline is not a dependency to revive.
 
-### Out of scope for the first milestone
+Kernel-side code remains C; library/application code remains C++20. Never
+write directly to a kernel-owned sensor over userspace I²C or silently
+replace a stock driver. Use a recoverable alternate kernel/driver.
 
-- claiming arbitrary sensor ROI on hardware/drivers that do not expose it;
-- silently substituting ISP `ScalerCrop` for a sensor readout crop;
-- automatic kernel patching or sensor register hacking;
-- reviving the legacy camera stack;
-- `raspiraw` compatibility;
-- synchronous debayer/encoding inside the capture callback;
-- Movidius/OpenVINO integration.
-
-Those can be evaluated only after the base capture path is repeatable.
-
----
-
-## Recommended implementation order
-
-1. Add a generic camera inventory tool using libcamera.
-2. Associate each camera with its media graph and sensor subdevice.
-3. Enumerate advertised modes, formats, pixel-array metadata, and crop/selection capabilities.
-4. Add an automated benchmark runner for all advertised modes.
-5. Add a single arbitrary-crop probe using TRY-state negotiation where available.
-6. Replace shell-based crop setup with direct media-controller/V4L2 subdevice ioctls.
-7. Add centered/all-size crop sweeps and maximum-stable-FPS search.
-8. Emit versioned JSON, CSV, and Markdown test results.
-9. Isolate each experimental crop test in a worker process with timeout/recovery.
-10. Use IMX296 to reproduce 128x96 and 1456x96 at approximately 536 fps as regression targets.
-11. Add a bounded RAM ring buffer.
-12. Benchmark direct SSD/NVMe writing.
-13. Add processed/YUV output and measure stride/padding.
-14. Add lightweight processing plugins.
-15. Add optional Python bindings after the C++ capture/test path is stable.
-
-The key project rules should be:
-
-- **capabilities are discovered, not assumed from the sensor name;**
-- **every crop result records requested and negotiated geometry;**
-- **sensor crop, fixed sensor mode crop, and ISP/scaler crop are never conflated;**
-- **every optimization is measured by achieved sensor-frame timestamps and dropped frames, not just requested FPS or encoder output FPS.**
+The active implementation sequence and acceptance gates are maintained in
+[the experimental roadmap](experimental-high-fps-roadmap.md); driver
+ownership and rollback are in [kernel-driver integration](kernel-driver-integration.md).
 
 ---
 
