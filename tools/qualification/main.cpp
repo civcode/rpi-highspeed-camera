@@ -424,6 +424,15 @@ std::string testCaseKey(const TestCase &test)
     if (test.frameDurationUs) canonical << *test.frameDurationUs;
     canonical << '|' << (test.streamKind == hscam::StreamKind::Raw ? "raw" : "processed");
     canonical << '|' << test.durationMs << '|' << test.exact << '|' << test.requireZeroDrops;
+    if (test.streamKind == hscam::StreamKind::Raw &&
+        (test.rawCapture.representation != hscam::RawRepresentation::Auto ||
+         test.rawCapture.format || test.rawCapture.sampleAlignment)) {
+        canonical << "|raw:" << hscam::qualification::representationName(test.rawCapture.representation)
+                  << ':' << (test.rawCapture.format ? test.rawCapture.format->name : "")
+                  << ':' << (test.rawCapture.sampleAlignment
+                                  ? hscam::qualification::alignmentName(*test.rawCapture.sampleAlignment)
+                                  : "");
+    }
     return hscam::qualification::fnvHex(canonical.str());
 }
 
@@ -537,6 +546,15 @@ Value captureConfigurationValue(const hscam::CaptureConfiguration &config)
             {"width", static_cast<std::uint64_t>(config.stream.size.width)},
             {"height", static_cast<std::uint64_t>(config.stream.size.height)},
             {"pixel_format", config.stream.format.name},
+            {"requested_pixel_format", config.stream.requestedFormat
+                                           ? Value(config.stream.requestedFormat->name)
+                                           : Value(nullptr)},
+            {"representation", hscam::qualification::representationName(config.stream.representation)},
+            {"data_bits", static_cast<std::uint64_t>(config.stream.dataBits)},
+            {"storage_bits", static_cast<std::uint64_t>(config.stream.storageBits)},
+            {"sample_alignment", hscam::qualification::alignmentName(config.stream.sampleAlignment)},
+            {"stride", config.stream.planes.empty() ? static_cast<std::uint64_t>(0)
+                              : static_cast<std::uint64_t>(config.stream.planes.front().stride)},
             {"frame_bytes", static_cast<std::uint64_t>(config.stream.frameBytes)},
             {"buffer_count", static_cast<std::uint64_t>(config.stream.bufferCount)}
         }},
@@ -625,10 +643,12 @@ int workerMain(const fs::path &casePath, const fs::path &resultPath)
                                          : hscam::NegotiationPolicy::AllowAdjustments;
         request.sensor.modeId = test.modeId;
         request.sensor.crop = test.crop;
+        hscam::qualification::applyRawCaptureSelection(request, test.rawCapture);
         if (test.frameDurationUs)
             request.timing.frameDuration = std::chrono::microseconds(*test.frameDurationUs);
 
         const auto configuration = camera.configure(request);
+        hscam::qualification::verifyRawCaptureSelection(request, configuration, false);
         result["configuration"] = captureConfigurationValue(configuration);
 
         auto session = camera.start();
@@ -697,7 +717,8 @@ int workerMain(const fs::path &casePath, const fs::path &resultPath)
 }
 
 Value characterizeModeSensorCrops(hscam::Context &context,
-                                   const hscam::CameraInfo &camera)
+                                   const hscam::CameraInfo &camera,
+                                   const Policy &policy)
 {
     Value::Array modes;
     for (const auto &mode : camera.sensorModes) {
@@ -713,8 +734,10 @@ Value characterizeModeSensorCrops(hscam::Context &context,
             hscam::CaptureRequest request;
             request.stream.kind = hscam::StreamKind::Raw;
             request.sensor.modeId = mode.id;
+            hscam::qualification::applyRawCaptureSelection(request, policy.rawCapture);
             request.negotiation = hscam::NegotiationPolicy::AllowAdjustments;
             const auto configuration = handle.configure(request);
+            hscam::qualification::verifyRawCaptureSelection(request, configuration, false);
             entry["configuration"] = captureConfigurationValue(configuration);
             entry["sensor_crop"] = rectValue(handle.currentSensorCrop());
             entry["error"] = nullptr;
@@ -763,6 +786,7 @@ std::vector<TestCase> buildCases(const Policy &policy, const hscam::CameraInfo &
             test.cameraId = camera.id;
             test.modeId = mode.id;
             test.streamKind = hscam::StreamKind::Raw;
+            test.rawCapture = policy.rawCapture;
             test.durationMs = policy.advertisedDurationMs;
             test.exact = false;
             test.requireZeroDrops = policy.requireZeroDrops;
@@ -1404,6 +1428,7 @@ void generateVisualSamples(hscam::Context &context,
         spec.crop = test.crop;
         spec.frameDurationUs = resultBestDurationUs(result);
         spec.streamKind = test.streamKind;
+        spec.rawSelection = test.rawCapture;
         spec.frameCount = std::max<std::uint64_t>(1, frameCount);
         spec.exact = test.exact;
         spec.playbackFps = policy.visualPlaybackFps;
@@ -1637,7 +1662,7 @@ int runMain(const fs::path &manifestPath, const fs::path &output,
 
     writeText(output / "mode_sensor_crops.json",
               hscam::internal::json::stringify(
-                  characterizeModeSensorCrops(context, camera), 2) + "\n");
+                  characterizeModeSensorCrops(context, camera, policy), 2) + "\n");
 
     std::optional<hscam::qualification::CropGeometry> geometry;
     if (policy.geometry.enabled) {
