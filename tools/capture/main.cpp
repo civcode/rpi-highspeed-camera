@@ -51,6 +51,7 @@ void usage()
 {
     std::cerr << "usage: hscam-capture [--camera ID] [--mode ID] [--frames N] [--raw|--processed]\n"
                  "       [--size WxH] [--format PIXELFORMAT] [--representation auto|uncompressed|compressed]\n"
+                 "       [--alignment native|left|right]\n"
                  "       [--crop X,Y,W,H] [--frame-duration-us N] [--exposure-us N] [--gain X]\n"
                  "       [--exact] (--discard-payload | --output PATH.hscap)\n";
 }
@@ -61,6 +62,14 @@ hscam::RawRepresentation parseRepresentation(const std::string &s)
     if (s == "uncompressed") return hscam::RawRepresentation::Uncompressed;
     if (s == "compressed") return hscam::RawRepresentation::Compressed;
     throw std::runtime_error("invalid --representation: " + s);
+}
+
+hscam::SampleAlignment parseAlignment(const std::string &s)
+{
+    if (s == "native") return hscam::SampleAlignment::Native;
+    if (s == "left") return hscam::SampleAlignment::Left;
+    if (s == "right") return hscam::SampleAlignment::Right;
+    throw std::runtime_error("invalid --alignment: " + s);
 }
 }
 
@@ -74,6 +83,7 @@ int main(int argc, char **argv)
     bool discard = false;
     bool exact = false;
     std::string representation = "auto";
+    std::string alignment;
     hscam::StreamKind streamKind = hscam::StreamKind::Raw;
     std::optional<hscam::Size> size;
     std::optional<hscam::Rect> crop;
@@ -101,6 +111,7 @@ int main(int argc, char **argv)
             else if (arg == "--discard-payload") discard = true;
             else if (arg == "--exact") exact = true;
             else if (arg == "--representation") representation = value("--representation");
+            else if (arg == "--alignment") alignment = value("--alignment");
             else if (arg == "--raw") streamKind = hscam::StreamKind::Raw;
             else if (arg == "--processed") streamKind = hscam::StreamKind::Processed;
             else { usage(); return 2; }
@@ -125,6 +136,7 @@ int main(int argc, char **argv)
         hscam::CaptureRequest request;
         request.stream.kind = streamKind;
         request.stream.representation = parseRepresentation(representation);
+        if (!alignment.empty()) request.stream.sampleAlignment = parseAlignment(alignment);
         request.negotiation = exact ? hscam::NegotiationPolicy::Exact : hscam::NegotiationPolicy::AllowAdjustments;
         if (!modeId.empty()) request.sensor.modeId = modeId;
         if (size) request.stream.size = size;

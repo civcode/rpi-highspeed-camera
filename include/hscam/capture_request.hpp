@@ -24,6 +24,7 @@ struct StreamRequest {
     std::optional<Size> size;
     std::optional<PixelFormat> format;
     RawRepresentation representation{RawRepresentation::Auto};
+    std::optional<SampleAlignment> sampleAlignment; // explicit container alignment override (nullopt = platform default)
     unsigned bufferCount{};
 };
 

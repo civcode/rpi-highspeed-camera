@@ -94,7 +94,7 @@ build/hscam-capture \
   --output example.hscap
 ```
 
-Request **uncompressed** Bayer explicitly. On the Raspberry Pi 5 the default raw role negotiates to the PiSP compressed `GBRG_PISP_COMP1`; passing `--representation uncompressed` (or an explicit unpacked format such as `--format SBGGR10`) selects the sensor's unpacked stream instead, which negotiates to a 16-bit Bayer container (`SGBRG16`). The negotiated container, requested format, and 10-bit/16-bit alignment are recorded in the bundle so `hscam-export` can decode the native sample width exactly:
+Request **uncompressed** Bayer explicitly. On the Raspberry Pi 5 the default raw role negotiates to the PiSP compressed `GBRG_PISP_COMP1`; passing `--representation uncompressed` (or an explicit unpacked format such as `--format SBGGR10`) selects the sensor's unpacked stream instead, which negotiates to a 16-bit Bayer container (`SGBRG16`). The bundle records what the pipeline actually negotiated - container format, requested format, representation class, 10-bit/16-bit bit widths, and sample alignment - so `hscam-export` can decode the native sample width exactly. On Raspberry Pi hardware the native sample is left-aligned in the wider container; other platforms use the standard right-aligned convention unless `--alignment left|right|native` overrides it:
 
 ```bash
 build/hscam-capture \

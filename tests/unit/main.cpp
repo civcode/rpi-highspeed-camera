@@ -329,4 +329,78 @@ void manifestRawMetadataRoundTrip()
     std::filesystem::remove_all(path,ec);
 }
 
-int main(){try{geometryAndModeIds();raw10Unpack();raw12Unpack();rawPartialGroups();rawFormatAndRenderCoverage();yuv420InfersPaddedChromaStride();bundleRejectsTrailingPayload();bundleRecovery();bundleRoundTrip();bayer16ContainerDecode();manifestRawMetadataRoundTrip();std::cout<<"hscam unit tests passed\n";return 0;}catch(const std::exception&e){std::cerr<<"unit test failed: "<<e.what()<<'\n';return 1;}}
+void rawEncodingClassification()
+{
+    using namespace hscam;
+    // Unpacked Bayer containers: one class, with their encoded bit depth.
+    require(classifyRawEncoding("SGBRG16") == RawEncoding::UnpackedBayer, "SGBRG16 unpacked class");
+    require(classifyRawEncoding("SBGGR10") == RawEncoding::UnpackedBayer, "SBGGR10 unpacked class");
+    require(classifyRawEncoding("sgbrg12") == RawEncoding::UnpackedBayer, "unpacked class is case-insensitive");
+    require(bayerBitDepth("SGBRG16") == 16, "SGBRG16 bit depth");
+    require(bayerBitDepth("SBGGR8") == 8, "SBGGR8 bit depth");
+    require(bayerBitDepth("SRGGB") == 0, "bare Bayer prefix carries no bit depth");
+    // CSI-2 packed Bayer is its own class (not unpacked Bayer).
+    require(classifyRawEncoding("SGBRG10_CSI2P") == RawEncoding::Csi2PackedBayer, "CSI-2 packed class");
+    require(bayerBitDepth("SGBRG10_CSI2P") == 10, "CSI-2 packed bit depth");
+    // PiSP COMP1 compression is its own class.
+    require(classifyRawEncoding("GBRG_PISP_COMP1") == RawEncoding::PispComp1, "COMP1 class");
+    require(bayerBitDepth("GBRG_PISP_COMP1") == 0, "COMP1 carries no Bayer bit depth");
+    // Processed and unknown names are not raw encodings.
+    require(classifyRawEncoding("UYVY") == RawEncoding::Unknown, "UYVY unknown class");
+    require(classifyRawEncoding("YUV420") == RawEncoding::Unknown, "YUV420 unknown class");
+    // Unpacked format names: explicit support only, no silent fallback.
+    require(unpackedBayerFormatName(8) == "SBGGR8", "8-bit unpacked name");
+    require(unpackedBayerFormatName(10) == "SBGGR10", "10-bit unpacked name");
+    require(unpackedBayerFormatName(12) == "SBGGR12", "12-bit unpacked name");
+    require(unpackedBayerFormatName(14) == "SBGGR14", "14-bit unpacked name");
+    require(unpackedBayerFormatName(16) == "SBGGR16", "16-bit unpacked name");
+    bool threw{};
+    try { unpackedBayerFormatName(11); } catch (const NegotiationFailed &) { threw = true; }
+    require(threw, "unsupported bit depth must throw");
+    threw = false;
+    try { unpackedBayerFormatName(0); } catch (const NegotiationFailed &) { threw = true; }
+    require(threw, "unknown bit depth must throw");
+}
+
+void manifestRawValidation()
+{
+    using namespace hscam; const auto path=std::filesystem::temp_directory_path()/"hscam-rawvalid-unit.hscap"; std::error_code ec; std::filesystem::remove_all(path,ec);
+    CaptureConfiguration cfg; cfg.stream.kind=StreamKind::Raw; cfg.stream.size={4,1}; cfg.stream.format={"SGBRG16"};
+    cfg.stream.representation=RawRepresentation::Uncompressed; cfg.stream.storageBits=16; cfg.stream.dataBits=10;
+    cfg.stream.sampleAlignment=SampleAlignment::Left; cfg.stream.frameBytes=8;
+    std::array<std::byte,8> pixels{}; PlaneView plane{pixels,8,8,-1}; FrameMetadata metadata; metadata.sequence=1;
+    { BundleWriter writer(path,"test-camera","synthetic",cfg); writer.append(metadata,std::span<const PlaneView>(&plane,1)); writer.finalize(); }
+    { BundleReader ok(path); require(ok.manifest().configuration.stream.dataBits==10,"consistent fixture parses"); }
+    const auto manifestFile=path/"manifest.json";
+    const std::string original=[&]{ std::ifstream in(manifestFile); std::ostringstream out; out<<in.rdbuf(); return out.str(); }();
+    const auto expectRejected=[&](const std::string &from,const std::string &to,const char *why){
+        std::string text=original;
+        const std::size_t pos=text.find(from);
+        require(pos!=std::string::npos,why);
+        text.replace(pos,from.size(),to);
+        { std::ofstream out(manifestFile,std::ios::trunc); out<<text; out.flush(); }
+        bool threw{};
+        try { BundleReader reader(path); } catch (const Error &) { threw=true; }
+        require(threw,why);
+        { std::ofstream restore(manifestFile,std::ios::trunc); restore<<original; restore.flush(); }
+    };
+    expectRejected("\"representation\": \"uncompressed\"","\"representation\": \"lossless\"","unknown representation value rejected");
+    expectRejected("\"sample_alignment\": \"left\"","\"sample_alignment\": \"middle\"","unknown alignment value rejected");
+    expectRejected("\"data_bits\": 10","\"data_bits\": 20","data_bits above storage_bits rejected");
+    expectRejected("\"data_bits\": 10","\"data_bits\": 16","left alignment without narrower data rejected");
+    expectRejected("\"storage_bits\": 16","\"storage_bits\": 12","storage_bits mismatching pixel format rejected");
+    expectRejected("\"pixel_format\": \"SGBRG16\"","\"pixel_format\": \"GBRG_PISP_COMP1\"","representation/encoding mismatch rejected");
+    // A PiSP COMP1 bundle records the compressed class and no container metadata.
+    std::filesystem::remove_all(path,ec);
+    CaptureConfiguration comp; comp.stream.kind=StreamKind::Raw; comp.stream.size={4,1}; comp.stream.format={"GBRG_PISP_COMP1"};
+    comp.stream.representation=RawRepresentation::Compressed; comp.stream.frameBytes=4;
+    std::array<std::byte,4> compPixels{}; PlaneView compPlane{compPixels,4,4,-1};
+    { BundleWriter writer(path,"test-camera","synthetic",comp); writer.append(metadata,std::span<const PlaneView>(&compPlane,1)); writer.finalize(); }
+    BundleReader compReader(path); const auto &m=compReader.manifest();
+    require(m.configuration.stream.representation==RawRepresentation::Compressed,"COMP1 recorded compressed");
+    require(m.configuration.stream.storageBits==0&&m.configuration.stream.dataBits==0,"COMP1 carries no container metadata");
+    require(m.configuration.stream.sampleAlignment==SampleAlignment::Native,"COMP1 alignment native");
+    std::filesystem::remove_all(path,ec);
+}
+
+int main(){try{geometryAndModeIds();raw10Unpack();raw12Unpack();rawPartialGroups();rawFormatAndRenderCoverage();yuv420InfersPaddedChromaStride();bundleRejectsTrailingPayload();bundleRecovery();bundleRoundTrip();bayer16ContainerDecode();manifestRawMetadataRoundTrip();rawEncodingClassification();manifestRawValidation();std::cout<<"hscam unit tests passed\n";return 0;}catch(const std::exception&e){std::cerr<<"unit test failed: "<<e.what()<<'\n';return 1;}}

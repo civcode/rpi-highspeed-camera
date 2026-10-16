@@ -30,10 +30,10 @@ struct StreamConfiguration {
     Size size;
     PixelFormat format;                          // negotiated
     std::optional<PixelFormat> requestedFormat; // explicit or representation-derived request
-    RawRepresentation representation{RawRepresentation::Auto};
+    RawRepresentation representation{RawRepresentation::Auto}; // negotiated raw encoding class
     unsigned storageBits{};                     // container bit depth (from the negotiated format)
     unsigned dataBits{};                        // effective/native sensor bit depth (0 = same as storage)
-    SampleAlignment sampleAlignment{SampleAlignment::Native};
+    SampleAlignment sampleAlignment{SampleAlignment::Native}; // native sample position inside the container
     std::vector<PlaneConfiguration> planes;
     std::size_t frameBytes{};
     unsigned bufferCount{};

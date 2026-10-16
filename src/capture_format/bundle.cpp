@@ -108,13 +108,53 @@ BundleManifest parseManifest(const Value &root)
     m.configuration.stream.size.width = static_cast<std::uint32_t>(stream.at("width").asUInt64());
     m.configuration.stream.size.height = static_cast<std::uint32_t>(stream.at("height").asUInt64());
     m.configuration.stream.frameBytes = static_cast<std::size_t>(stream.at("frame_bytes").asUInt64());
+    // Optional raw-stream metadata. Values are validated strictly: unknown encoding,
+    // alignment, or bit-depth/alignment combinations are rejected, and the recorded
+    // representation must match the encoding class of the negotiated pixel format.
     if (const auto rf = stream.find("requested_format")) m.configuration.stream.requestedFormat = PixelFormat{rf->asString()};
-    if (const auto rep = stream.find("representation"))
-        m.configuration.stream.representation = rep->asString() == "compressed" ? RawRepresentation::Compressed : RawRepresentation::Uncompressed;
+    bool representationSeen{};
+    if (const auto rep = stream.find("representation")) {
+        const std::string v = rep->asString();
+        if (v != "uncompressed" && v != "compressed")
+            throw Error("invalid stream.representation value: " + v);
+        m.configuration.stream.representation = v == "compressed" ? RawRepresentation::Compressed : RawRepresentation::Uncompressed;
+        representationSeen = true;
+    }
     if (const auto sb = stream.find("storage_bits")) m.configuration.stream.storageBits = static_cast<unsigned>(sb->asUInt64());
     if (const auto db = stream.find("data_bits")) m.configuration.stream.dataBits = static_cast<unsigned>(db->asUInt64());
-    if (const auto al = stream.find("sample_alignment"))
-        m.configuration.stream.sampleAlignment = al->asString() == "left" ? SampleAlignment::Left : SampleAlignment::Right;
+    if (const auto al = stream.find("sample_alignment")) {
+        const std::string v = al->asString();
+        if (v != "native" && v != "left" && v != "right")
+            throw Error("invalid stream.sample_alignment value: " + v);
+        m.configuration.stream.sampleAlignment = v == "left" ? SampleAlignment::Left
+                                          : v == "right" ? SampleAlignment::Right
+                                          : SampleAlignment::Native;
+    }
+    if (m.configuration.stream.kind == StreamKind::Raw) {
+        const RawEncoding encoding = classifyRawEncoding(m.configuration.stream.format.name);
+        if (representationSeen && encoding != RawEncoding::Unknown) {
+            const RawRepresentation expected = encoding == RawEncoding::UnpackedBayer
+                                                    ? RawRepresentation::Uncompressed
+                                                    : RawRepresentation::Compressed;
+            if (m.configuration.stream.representation != expected)
+                throw Error("stream.representation does not match the pixel format encoding: " +
+                            m.configuration.stream.format.name);
+        }
+        if (encoding == RawEncoding::UnpackedBayer) {
+            const unsigned formatBits = bayerBitDepth(m.configuration.stream.format.name);
+            if (m.configuration.stream.storageBits != 0 && m.configuration.stream.storageBits != formatBits)
+                throw Error("stream.storage_bits does not match the pixel format bit depth: " +
+                            m.configuration.stream.format.name);
+            if (m.configuration.stream.dataBits != 0) {
+                const unsigned storage = m.configuration.stream.storageBits ? m.configuration.stream.storageBits : formatBits;
+                if (m.configuration.stream.dataBits > storage)
+                    throw Error("stream.data_bits exceeds stream.storage_bits");
+                if (m.configuration.stream.sampleAlignment == SampleAlignment::Left &&
+                    m.configuration.stream.dataBits >= storage)
+                    throw Error("stream.sample_alignment left requires data_bits below storage_bits");
+            }
+        }
+    }
     for (const auto &p : stream.at("planes").asArray())
         m.observedPlanes.push_back({static_cast<std::uint32_t>(p.at("stride").asUInt64()),
                                     static_cast<std::uint32_t>(p.at("size").asUInt64())});

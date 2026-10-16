@@ -91,10 +91,12 @@ Raw streams may additionally carry these optional fields (absent on older bundle
 - `stream.frame_bytes`: negotiated frame size from libcamera.
 - `stream.planes`: observed plane layout from delivered buffers. Each object records `stride` and `size`. A `stride` value of `0` means that the backend could not obtain an independent stride for that plane; it must not be interpreted as tightly packed. For planar YUV420, the v0.1 renderer infers an unknown chroma stride from the negotiated padded luma stride.
 - `stream.requested_format`: optional (raw). The pixel format that was explicitly requested, or derived from the requested representation, when it differs from the negotiated format. Absent when nothing was explicitly requested.
-- `stream.representation`: optional (raw). `uncompressed` or `compressed`, recording which raw representation class was requested.
-- `stream.storage_bits`: optional (raw). Container bit depth implied by the negotiated pixel format.
-- `stream.data_bits`: optional (raw). Effective native sensor bit depth. When lower than `storage_bits`, the native sample sits at the top of the wider container.
-- `stream.sample_alignment`: optional (raw). `left` or `right`; how the native sample is positioned inside the wider container. On the Raspberry Pi 5 the PiSP CFE emits the native sample left-aligned (top-aligned) in a 16-bit container, so a 10-bit sensor stream negotiated to `SGBRG16` stores `sample = value << 6` and the decoder recovers `value = word >> (storage_bits - data_bits)`.
+- `stream.representation`: optional (raw). `uncompressed` or `compressed`, recording the raw representation class the pipeline actually negotiated: `uncompressed` for a genuine unpacked Bayer container, `compressed` for encoded raw (PiSP `COMP1`, CSI-2 packed). Unknown formats carry no representation.
+- `stream.storage_bits`: optional (raw). Container bit depth implied by the negotiated unpacked Bayer pixel format.
+- `stream.data_bits`: optional (raw). Effective native sensor bit depth. When lower than `storage_bits`, the native sample occupies fewer bits than the container; its position is given by `sample_alignment`.
+- `stream.sample_alignment`: optional (raw). `native`, `left`, or `right`; how the native sample is positioned inside the wider container. Only written when it differs from the `native` (standard right-aligned) convention. On Raspberry Pi hardware the PiSP CFE emits the native sample left-aligned (top-aligned) in a wider container, so a 10-bit sensor stream negotiated to `SGBRG16` stores `sample = value << 6` and the decoder recovers `value = word >> (storage_bits - data_bits)`; other platforms use the standard convention unless the caller explicitly overrides the alignment.
+
+These fields are validated on read: an unknown `representation` or `sample_alignment` value, a `storage_bits` that does not match the pixel format, a `data_bits` above `storage_bits`, a left alignment without a narrower data width, or a representation that contradicts the pixel format's encoding class is rejected as a corrupted or inconsistent bundle.
 
 These fields are written only when they are meaningful, so existing bundles (and processed streams) keep the original schema and remain readable.
 - `timing.requested_frame_duration_us`: requested fixed frame duration, if one was supplied.

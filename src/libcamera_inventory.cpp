@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <fstream>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -42,35 +43,17 @@ Rect toRect(const libcamera::Rectangle &value)
     return {value.x, value.y, value.width, value.height};
 }
 
-unsigned bitDepthFromFormat(const std::string &name)
+// The PiSP CFE (Raspberry Pi 4/5 and compute modules) emits native sensor samples
+// left-aligned (top-aligned) in a wider Bayer container; other pipelines follow the
+// standard right-aligned convention. Read the platform model once to decide.
+bool piLeftAlignmentSupported()
 {
-    for (unsigned bits : {16U, 14U, 12U, 10U, 8U}) {
-        if (name.find(std::to_string(bits)) != std::string::npos)
-            return bits;
-    }
-    return 0;
-}
-
-std::string unpackedFormatForBits(unsigned bits)
-{
-    for (unsigned candidate : {8U, 10U, 12U, 14U, 16U})
-        if (bits == candidate)
-            return "SBGGR" + std::to_string(candidate);
-    return "SBGGR12";
-}
-
-bool isUncompressedFormat(const std::string &name)
-{
-    const auto upper = [](std::string v) {
-        std::transform(v.begin(), v.end(), v.begin(), [](unsigned char c) { return std::toupper(c); });
-        return v;
-    };
-    const std::string s = upper(name);
-    if (s.find("COMP1") != std::string::npos) return false;
-    if (s.find("CSI2P") != std::string::npos) return false;
-    for (const char *prefix : {"SRGGB", "SGRBG", "SGBRG", "SBGGR"})
-        if (s.find(prefix) != std::string::npos) return true;
-    return false;
+    static const bool supported = [] {
+        std::ifstream in("/proc/device-tree/model");
+        const std::string model((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        return model.find("Raspberry Pi") != std::string::npos;
+    }();
+    return supported;
 }
 
 std::vector<std::int64_t> systemDevices(const std::shared_ptr<libcamera::Camera> &camera)
@@ -102,7 +85,7 @@ std::vector<SensorMode> enumerateRawModes(const std::shared_ptr<libcamera::Camer
             SensorMode mode;
             mode.size = toSize(size);
             mode.format = {formatName};
-            mode.bitDepth = bitDepthFromFormat(formatName);
+            mode.bitDepth = bayerBitDepth(formatName);
             mode.id = stableModeId(mode);
             modes.push_back(std::move(mode));
         }
@@ -692,19 +675,21 @@ public:
         const bool rawStream = request.stream.kind == StreamKind::Raw;
         // Resolve the sensor's native (pre-negotiation) mode for the requested size so we can
         // derive the requested representation and record the native bit depth (10 for OV5647).
-        const SensorMode *nativeMode{};
-        unsigned nativeBits{};
+        // Copy the selected mode: the enumerated vector does not outlive this block.
+        std::optional<SensorMode> nativeMode;
         if (rawStream) {
             const auto modes = enumerateRawModes(camera_);
             auto byId = std::find_if(modes.begin(), modes.end(), [&](const SensorMode &m) {
                 return request.sensor.modeId && m.id == *request.sensor.modeId;
             });
-            auto bySize = std::find_if(modes.begin(), modes.end(), [&](const SensorMode &m) {
-                return m.size.width == static_cast<std::uint32_t>(stream.size.width) &&
-                       m.size.height == static_cast<std::uint32_t>(stream.size.height);
-            });
-            nativeMode = byId != modes.end() ? &*byId : (bySize != modes.end() ? &*bySize : nullptr);
-            if (nativeMode) nativeBits = nativeMode->bitDepth;
+            auto bySize = byId == modes.end()
+                             ? std::find_if(modes.begin(), modes.end(), [&](const SensorMode &m) {
+                                   return m.size.width == static_cast<std::uint32_t>(stream.size.width) &&
+                                          m.size.height == static_cast<std::uint32_t>(stream.size.height);
+                               })
+                             : byId;
+            if (bySize != modes.end())
+                nativeMode = *bySize;
         }
 
         std::string requestedFormatName; // explicit name or representation-derived request
@@ -721,7 +706,7 @@ public:
             if (!nativeMode)
                 throw NegotiationFailed("cannot determine the sensor's native format for the requested representation");
             requestedFormatName = request.stream.representation == RawRepresentation::Uncompressed
-                                      ? unpackedFormatForBits(nativeBits)
+                                      ? unpackedBayerFormatName(nativeMode->bitDepth)
                                       : nativeMode->format.name;
             const auto format = libcamera::PixelFormat::fromString(requestedFormatName);
             if (!format.isValid())
@@ -751,22 +736,31 @@ public:
         result.stream.format = {config->at(0).pixelFormat.toString()};
         if (!requestedFormatName.empty())
             result.stream.requestedFormat = PixelFormat{requestedFormatName};
-        result.stream.representation = request.stream.representation;
         result.stream.frameBytes = config->at(0).frameSize;
         result.stream.bufferCount = config->at(0).bufferCount;
         result.stream.planes.push_back({config->at(0).stride, config->at(0).frameSize});
 
-        // Record the storage container width vs the effective sensor bit depth so the offline
-        // decoder places the native sample correctly (10-bit in a 16-bit container, left-aligned
-        // on the Pi 5 CFE output). Only for genuine unpacked Bayer containers; the compressed
-        // PiSP format has no usable bit depth to record.
-        const unsigned storageBits = bitDepthFromFormat(result.stream.format.name);
-        result.stream.storageBits = storageBits;
-        if (storageBits >= 8 && isUncompressedFormat(result.stream.format.name)) {
-            result.stream.dataBits = nativeBits ? nativeBits : storageBits;
-            result.stream.sampleAlignment = result.stream.dataBits < result.stream.storageBits
-                                                ? SampleAlignment::Left
-                                                : SampleAlignment::Native;
+        // Record what the pipeline actually negotiated: the encoding class, and for genuine
+        // unpacked Bayer containers the storage width, the effective native bit depth, and the
+        // native sample alignment (left-aligned on the Raspberry Pi CFE, standard convention
+        // elsewhere; an explicit request override always wins).
+        const RawEncoding negotiatedEncoding = classifyRawEncoding(result.stream.format.name);
+        if (rawStream && negotiatedEncoding != RawEncoding::Unknown)
+            result.stream.representation = negotiatedEncoding == RawEncoding::UnpackedBayer
+                                                ? RawRepresentation::Uncompressed
+                                                : RawRepresentation::Compressed;
+        if (rawStream && negotiatedEncoding == RawEncoding::UnpackedBayer) {
+            const unsigned storageBits = bayerBitDepth(result.stream.format.name);
+            if (storageBits >= 8) {
+                result.stream.storageBits = storageBits;
+                const unsigned dataBits =
+                    nativeMode && nativeMode->bitDepth != 0 ? nativeMode->bitDepth : storageBits;
+                result.stream.dataBits = dataBits;
+                if (request.stream.sampleAlignment)
+                    result.stream.sampleAlignment = *request.stream.sampleAlignment;
+                else if (dataBits < storageBits && piLeftAlignmentSupported())
+                    result.stream.sampleAlignment = SampleAlignment::Left;
+            }
         }
         result.timing.requestedFrameDuration = request.timing.frameDuration;
         result.timing.exposure = request.timing.exposure;
@@ -799,12 +793,15 @@ public:
                 throw ExactConfigurationFailed("libcamera adjusted an explicitly requested field");
 
             // The requested representation must be honored even though the container format name
-            // is allowed to change (e.g. SBGGR10 -> SGBRG16 is still uncompressed).
+            // is allowed to change (e.g. SBGGR10 -> SGBRG16 is still uncompressed; the PiSP COMP1
+            // and CSI-2 packed formats both belong to the compressed class).
             if (rawStream && request.stream.representation != RawRepresentation::Auto) {
                 const std::string negotiated = config->at(0).pixelFormat.toString();
                 const bool requestedUncompressed =
                     request.stream.representation == RawRepresentation::Uncompressed;
-                if (isUncompressedFormat(negotiated) != requestedUncompressed)
+                const bool negotiatedUncompressed =
+                    classifyRawEncoding(negotiated) == RawEncoding::UnpackedBayer;
+                if (negotiatedUncompressed != requestedUncompressed)
                     throw ExactConfigurationFailed("requested " +
                         std::string(requestedUncompressed ? "uncompressed" : "compressed") +
                         " raw but the pipeline negotiated " + negotiated);
