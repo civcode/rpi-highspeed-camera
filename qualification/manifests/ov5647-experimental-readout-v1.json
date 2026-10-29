@@ -7,15 +7,31 @@
     "representation": "uncompressed",
     "format": "SBGGR10"
   },
+  "manual_controls": {
+    "exposure_us": 4000,
+    "analogue_gain": 4.0
+  },
   "advertised_modes": {
     "enabled": true,
     "duration_ms": 1500
   },
   "experimental_readouts": [
-    {"width": 640, "height": 240},
-    {"width": 640, "height": 128},
-    {"width": 640, "height": 64},
-    {"width": 640, "height": 32}
+    {
+      "width": 640,
+      "height": 240
+    },
+    {
+      "width": 640,
+      "height": 128
+    },
+    {
+      "width": 640,
+      "height": 64
+    },
+    {
+      "width": 640,
+      "height": 32
+    }
   ],
   "crop_geometry": {
     "enabled": false

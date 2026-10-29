@@ -29,6 +29,8 @@ struct VisualSampleSpec {
     std::optional<std::string> modeId;
     std::optional<Rect> crop;
     std::optional<std::int64_t> frameDurationUs;
+    std::optional<std::int64_t> manualExposureUs;
+    std::optional<double> manualAnalogueGain;
     StreamKind streamKind{StreamKind::Raw};
     RawCaptureSelection rawSelection;
     std::uint64_t frameCount{120};
@@ -97,6 +99,10 @@ inline VisualSampleResult captureVisualSample(Context &context,
     applyRawCaptureSelection(request, spec.rawSelection);
     if (spec.frameDurationUs)
         request.timing.frameDuration = std::chrono::microseconds(*spec.frameDurationUs);
+    if (spec.manualExposureUs)
+        request.timing.exposure = std::chrono::microseconds(*spec.manualExposureUs);
+    if (spec.manualAnalogueGain)
+        request.timing.analogueGain = *spec.manualAnalogueGain;
 
     const auto configuration = camera.configure(request);
     verifyRawCaptureSelection(request, configuration, true);

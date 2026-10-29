@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <cctype>
+#include <cmath>
 #include <chrono>
 #include <csignal>
 #include <cstdint>
@@ -46,6 +47,10 @@ struct Policy {
     std::uint64_t workerTimeoutMs{15000};
     bool requireZeroDrops{true};
     hscam::qualification::RawCaptureSelection rawCapture;
+    // Optional manual controls keep FPS probes and visual evidence at the
+    // same exposure/gain instead of letting auto-exposure lengthen frames.
+    std::optional<std::int64_t> manualExposureUs;
+    std::optional<double> manualAnalogueGain;
     bool advertisedEnabled{true};
     std::uint64_t advertisedDurationMs{3000};
     std::vector<hscam::Size> experimentalReadouts; // fail-closed exact sensor mode sizes
@@ -88,6 +93,8 @@ struct TestCase {
     std::optional<std::int64_t> frameDurationUs;
     hscam::StreamKind streamKind{hscam::StreamKind::Raw};
     hscam::qualification::RawCaptureSelection rawCapture;
+    std::optional<std::int64_t> manualExposureUs;
+    std::optional<double> manualAnalogueGain;
     std::uint64_t durationMs{3000};
     bool exact{true};
     bool requireZeroDrops{true};
@@ -282,6 +289,21 @@ Policy parsePolicy(const Value &root)
         }
     }
 
+    if (const auto *controls = root.find("manual_controls")) {
+        if (const auto *exposure = controls->find("exposure_us")) {
+            policy.manualExposureUs = exposure->asInt64();
+            if (*policy.manualExposureUs <= 0)
+                throw std::runtime_error("manual_controls.exposure_us must be positive");
+        }
+        if (const auto *gain = controls->find("analogue_gain")) {
+            policy.manualAnalogueGain = gain->asNumber();
+            if (!std::isfinite(*policy.manualAnalogueGain) ||
+                *policy.manualAnalogueGain < 1.0 ||
+                *policy.manualAnalogueGain > 16.0)
+                throw std::runtime_error("manual_controls.analogue_gain must be finite and in [1,16]");
+        }
+    }
+
     if (const auto *advertised = root.find("advertised_modes")) {
         policy.advertisedEnabled = boolOr(*advertised, "enabled", true);
         policy.advertisedDurationMs = uintOr(*advertised, "duration_ms", 3000);
@@ -388,6 +410,8 @@ Value caseValue(const TestCase &test)
         {"mode_height", test.expectedModeSize ? Value(static_cast<std::uint64_t>(test.expectedModeSize->height)) : Value(nullptr)},
         {"crop", rectValue(test.crop)},
         {"frame_duration_us", test.frameDurationUs ? Value(*test.frameDurationUs) : Value(nullptr)},
+        {"manual_exposure_us", test.manualExposureUs ? Value(*test.manualExposureUs) : Value(nullptr)},
+        {"manual_analogue_gain", test.manualAnalogueGain ? Value(*test.manualAnalogueGain) : Value(nullptr)},
         {"stream_kind", test.streamKind == hscam::StreamKind::Raw ? "raw" : "processed"},
         {"duration_ms", test.durationMs},
         {"exact", test.exact},
@@ -419,6 +443,10 @@ TestCase parseCase(const Value &root)
     }
     test.crop = parseRect(root.at("crop"));
     if (!root.at("frame_duration_us").isNull()) test.frameDurationUs = root.at("frame_duration_us").asInt64();
+    if (const auto *exposure = root.find("manual_exposure_us"); exposure && !exposure->isNull())
+        test.manualExposureUs = exposure->asInt64();
+    if (const auto *gain = root.find("manual_analogue_gain"); gain && !gain->isNull())
+        test.manualAnalogueGain = gain->asNumber();
     if (const auto *kind = root.find("stream_kind")) {
         if (kind->asString() == "raw") test.streamKind = hscam::StreamKind::Raw;
         else if (kind->asString() == "processed") test.streamKind = hscam::StreamKind::Processed;
@@ -456,6 +484,10 @@ std::string testCaseKey(const TestCase &test)
         canonical << test.crop->x << ',' << test.crop->y << ',' << test.crop->width << ',' << test.crop->height;
     canonical << '|';
     if (test.frameDurationUs) canonical << *test.frameDurationUs;
+    canonical << '|';
+    if (test.manualExposureUs) canonical << *test.manualExposureUs;
+    canonical << '|';
+    if (test.manualAnalogueGain) canonical << *test.manualAnalogueGain;
     canonical << '|' << (test.streamKind == hscam::StreamKind::Raw ? "raw" : "processed");
     canonical << '|' << test.durationMs << '|' << test.exact << '|' << test.requireZeroDrops;
     if (test.streamKind == hscam::StreamKind::Raw &&
@@ -680,6 +712,10 @@ int workerMain(const fs::path &casePath, const fs::path &resultPath)
         hscam::qualification::applyRawCaptureSelection(request, test.rawCapture);
         if (test.frameDurationUs)
             request.timing.frameDuration = std::chrono::microseconds(*test.frameDurationUs);
+        if (test.manualExposureUs)
+            request.timing.exposure = std::chrono::microseconds(*test.manualExposureUs);
+        if (test.manualAnalogueGain)
+            request.timing.analogueGain = *test.manualAnalogueGain;
 
         const auto configuration = camera.configure(request);
         hscam::qualification::verifyRawCaptureSelection(request, configuration, false);
@@ -829,6 +865,8 @@ std::vector<TestCase> buildCases(const Policy &policy, const hscam::CameraInfo &
         test.durationMs = durationMs;
         test.exact = exact;
         test.requireZeroDrops = policy.requireZeroDrops;
+        test.manualExposureUs = policy.manualExposureUs;
+        test.manualAnalogueGain = policy.manualAnalogueGain;
         const auto key = testCaseKey(test);
         if (!cropKeys.insert(key).second)
             return false;
@@ -856,6 +894,8 @@ std::vector<TestCase> buildCases(const Policy &policy, const hscam::CameraInfo &
             test.durationMs = policy.advertisedDurationMs;
             test.exact = false;
             test.requireZeroDrops = policy.requireZeroDrops;
+            test.manualExposureUs = policy.manualExposureUs;
+            test.manualAnalogueGain = policy.manualAnalogueGain;
             test.id = (policy.experimentalReadouts.empty() ? "mode-" : "experiment-mode-") +
                       testCaseKey(test);
             cases.push_back(std::move(test));
@@ -872,6 +912,8 @@ std::vector<TestCase> buildCases(const Policy &policy, const hscam::CameraInfo &
             test.durationMs = policy.advertisedDurationMs;
             test.exact = false;
             test.requireZeroDrops = policy.requireZeroDrops;
+            test.manualExposureUs = policy.manualExposureUs;
+            test.manualAnalogueGain = policy.manualAnalogueGain;
             test.id = "processed-default-" + testCaseKey(test);
             cases.push_back(std::move(test));
         }
@@ -1519,6 +1561,8 @@ void generateVisualSamples(hscam::Context &context,
         spec.modeId = test.modeId;
         spec.crop = test.crop;
         spec.frameDurationUs = resultBestDurationUs(result);
+        spec.manualExposureUs = test.manualExposureUs;
+        spec.manualAnalogueGain = test.manualAnalogueGain;
         spec.streamKind = test.streamKind;
         spec.rawSelection = test.rawCapture;
         spec.frameCount = std::max<std::uint64_t>(1, frameCount);
