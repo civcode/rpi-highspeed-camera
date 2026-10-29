@@ -98,6 +98,37 @@ def export_command(executable, bundle, png, settings):
     return [executable, "image", bundle, "--frame", settings.frame, "--output", png]
 
 
+class PngSaver:
+    """Number manual snapshots in /tmp, preserving files from earlier runs."""
+
+    def __init__(self, directory=Path("/tmp")):
+        self.directory = Path(directory)
+        self.next_number = 1
+        for path in self.directory.glob("hscam-live-*.png"):
+            number = path.name.removeprefix("hscam-live-").removesuffix(".png")
+            if number.isascii() and number.isdecimal():
+                self.next_number = max(self.next_number, int(number) + 1)
+
+    def save(self, image_bytes):
+        if not image_bytes.startswith(b"\\x89PNG\\r\\n\\x1a\\n"):
+            raise ValueError("the displayed frame does not contain PNG data")
+        while True:
+            path = self.directory / f"hscam-live-{self.next_number:06d}.png"
+            self.next_number += 1
+            try:
+                # Exclusive creation: never overwrite a snapshot, even when a
+                # second viewer is running or a file appeared after startup.
+                with path.open("xb") as output:
+                    try:
+                        output.write(image_bytes)
+                    except OSError:
+                        path.unlink(missing_ok=True)
+                        raise
+                return path
+            except FileExistsError:
+                continue
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--frames", type=int, default=10, help="initial frames per batch")
@@ -244,6 +275,28 @@ def main():
 
     image_label = tk.Label(root, text="Starting camera...", bg="black", fg="white")
     image_label.pack(fill="both", expand=True, padx=8, pady=5)
+
+    saver = PngSaver()
+    displayed_png = None
+
+    def save_current_image():
+        if displayed_png is None:
+            return
+        try:
+            path = saver.save(displayed_png)
+        except (OSError, ValueError) as exc:
+            save_message.config(text=f"Save failed: {exc}", foreground="firebrick")
+        else:
+            save_message.config(text=f"Saved {path}", foreground="darkgreen")
+
+    save_bar = ttk.Frame(root)
+    save_bar.pack(fill="x", padx=8, pady=(0, 4))
+    save_button = ttk.Button(save_bar, text="Save image", command=save_current_image,
+                             state="disabled")
+    save_button.pack(side="left")
+    save_message = ttk.Label(save_bar, text="Save displayed PNG to /tmp (numbered files)")
+    save_message.pack(side="left", padx=10)
+
     status = tk.Label(root, text="Waiting for first batch", anchor="w")
     status.pack(fill="x", padx=8, pady=(0, 8))
 
@@ -259,6 +312,7 @@ def main():
         root.destroy()
 
     def refresh():
+        nonlocal displayed_png
         latest = None
         try:
             while True:
@@ -280,6 +334,8 @@ def main():
                 preview = ImageTk.PhotoImage(image)
                 image_label.config(image=preview, text="")
                 image_label.image = preview
+                displayed_png = data  # The original PNG, not the scaled Tk preview.
+                save_button.config(state="normal")
                 status.config(
                     text=f"Batch {count} (settings #{revision}) | {settings.summary()} | "
                          f"{seconds * 1000:.0f} ms/batch | {1 / max(seconds, 1e-9):.1f} preview FPS"
