@@ -1,8 +1,10 @@
 # Experimental Linux sensor drivers
 
 This tree is reserved for **opt-in, reviewable extensions** to the Raspberry
-Pi Linux V4L2 sensor drivers, written in C. The current repository does
-**not** include a custom OV5647 driver or claim 180–750 FPS on Pi 5.
+Pi Linux V4L2 sensor drivers, written in C. The opt-in
+[OV5647 multi-mode POC](ov5647/poc/README.md) has now been compiled, booted
+and measured on Pi 5 (640×128/64/32). It provides timing evidence, not yet
+validated physical crop geometry or production image quality.
 
 See [kernel driver integration](../docs/kernel-driver-integration.md) and
 [experimental development roadmap](../docs/experimental-high-fps-roadmap.md).

@@ -1,5 +1,9 @@
 # OV5647 H5 — first Pi 5 boot and RAW validation
 
+> Historical first-mode investigation below. The 2026-10-29
+> [multi-mode POC and lighting/gain findings](poc/README.md) supersede the
+> old 60-FPS ramp block as current status; physical crop fidelity remains open.
+
 **Hardware field observation (2026-10-16):** experimental OV5647 module
 `f8a5b3a6a85b5f1da9d31e95716bdef40d0bc0ce4003620f577de16266217777`
 was staged as `updates/hscam/ov5647.ko` and the Pi rebooted successfully

@@ -14,8 +14,18 @@ This project has not published its first stable release yet.
   readout-only OV5647 qualification manifest and exact-mode matching.
 - Added kernel driver integration, conflict/rollback architecture, and
   milestone-based experimental development plan.
-- **Pending:** the actual OV5647 kernel mode-table extensions and verified
-  reduced-height FPS measurements on Pi 5, then other official sensors.
+- Added a separate, checksum-pinned OV5647 multi-mode POC with legacy-derived
+  640×128/64/32 register profiles, preserved stock modes, guarded deployment
+  and byte-for-byte backup of the previous experimental override.
+- Recorded approximately ten-second saved-RAW runs at 298.62/502.14/655.95
+  steady FPS respectively, without reported sequence gaps or queue overruns;
+  rejected a 700-FPS 32-row run with a 41-ms interval. Physical ROI/image
+  fidelity and absolute maximum FPS remain unqualified.
+- Added the POC benchmark, provenance, reconstruction/timing tests and
+  exposure/gain comparison instructions. Qualification manifests can now
+  carry manual exposure/gain consistently into workers and visual samples.
+- **Pending:** physical readout geometry/image verification, longer/repeated
+  boundary testing, generic qualification startup handling, and other sensors.
 
 ### Capture core
 

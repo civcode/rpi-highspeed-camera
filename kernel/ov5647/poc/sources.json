@@ -1,0 +1,27 @@
+[
+  {
+    "file": "kernel/work/ov5647-poc-sources/ov5647_modes.h",
+    "url": "https://raw.githubusercontent.com/Hermann-SW/fork-raspiraw/18fac55136f98960ccd4dcfff95112134e5e45db/ov5647_modes.h",
+    "sha256": "3f9b30c373eb360d0321a1332bceba7efae90522fb94b704b30218c5e4512033"
+  },
+  {
+    "file": "kernel/work/ov5647-poc-sources/raspiraw.c",
+    "url": "https://raw.githubusercontent.com/Hermann-SW/fork-raspiraw/18fac55136f98960ccd4dcfff95112134e5e45db/raspiraw.c",
+    "sha256": "dc22ade6f403e7a71c1a9325f9199f2ea9d9dfe9c584b333fd701039036ab1ae"
+  },
+  {
+    "file": "kernel/work/ov5647-poc-sources/tools-640x128",
+    "url": "https://raw.githubusercontent.com/Hermann-SW/fork-raspiraw/18fac55136f98960ccd4dcfff95112134e5e45db/tools/640x128",
+    "sha256": "b847f014350a439221af71a30bfb389f146046163d338778d1500adb3a7ef193"
+  },
+  {
+    "file": "kernel/work/ov5647-poc-sources/tools-640x64",
+    "url": "https://raw.githubusercontent.com/Hermann-SW/fork-raspiraw/18fac55136f98960ccd4dcfff95112134e5e45db/tools/640x64",
+    "sha256": "fae4ee359f4504ad5bb6f1e15510d00ecb4771220eaab7a1dd7473a259af0198"
+  },
+  {
+    "file": "kernel/work/ov5647-poc-sources/tools-640x32",
+    "url": "https://raw.githubusercontent.com/Hermann-SW/fork-raspiraw/18fac55136f98960ccd4dcfff95112134e5e45db/tools/640x32",
+    "sha256": "12c0cc07cb8b10793639058dd54b88fbb611400a5011a8c2a1b65238bff02510"
+  }
+]

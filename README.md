@@ -39,12 +39,14 @@ build/hscam-qualify run \
 
 The experimental manifest requests exact 640×240/128/64/32 readout
 dimensions; it will **not** silently switch to normal 640×480 capture.
-These are historical research candidates, not verified FPS results on Pi 5.
-
-The kernel driver for these readouts is **not implemented yet**.
-The strategy API, read-only discovery command and fail-closed planner
-are software foundations; the driver must still be ported, built and
-measured on hardware. See milestones H5–H9 in the active roadmap.
+The opt-in [OV5647 multi-mode POC](kernel/ov5647/poc/README.md) now exposes
+all four readout heights on Pi 5. Recorded steady-state rates reached
+**298.62 FPS at 640×128, 502.14 FPS at 640×64, and 655.95 FPS at 640×32**
+in approximately ten-second saved-RAW tests with no reported gaps/overruns.
+These are tested timing points, not absolute maxima or verified physical ROI
+geometry. The standalone POC runner separates startup from steady timing;
+the generic qualification runner still has startup/jitter and visual-evidence
+limitations. See the POC notes for exact commands, evidence and rollback.
 
 ## First experimental OV5647 mode on Pi 5
 
@@ -147,6 +149,16 @@ build/hscam-capture \
   --frames 10000 \
   --discard-payload
 ```
+
+Output HSCAP directories must not already exist; there is no `--overwrite`
+option. Use a fresh name per run (including when reusing a shell variable):
+
+```bash
+OUT="qualification/work/capture-$(date +%Y%m%d-%H%M%S-%N)"
+```
+
+For the new fixed-mode IDs, exposure/gain examples and measured timing limits,
+see [the POC capture guide](kernel/ov5647/poc/README.md#capture-and-lighting-insights).
 
 Store a self-describing raw capture:
 
