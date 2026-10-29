@@ -1,8 +1,9 @@
 """Host-side tests for batch settings, independent of camera hardware."""
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
-from hscam_live import BatchSettings, SharedSettings, capture_command, export_command
+from hscam_live import BatchSettings, PngSaver, SharedSettings, capture_command, export_command
 
 
 class BatchSettingsTests(unittest.TestCase):
@@ -38,6 +39,45 @@ class BatchSettingsTests(unittest.TestCase):
             with self.subTest(field=field, value=value), self.assertRaises(ValueError):
                 state.update(BatchSettings.parse(fields))
         self.assertEqual(state.snapshot()[1], 0)
+
+
+class PngSaverTests(unittest.TestCase):
+    PNG = b"\x89PNG\r\n\x1a\nexample-png-bytes"
+
+    def test_numbers_increase_and_contents_are_unchanged(self):
+        with TemporaryDirectory() as directory:
+            saver = PngSaver(directory)
+            first = saver.save(self.PNG)
+            second = saver.save(self.PNG + b"second")
+            self.assertEqual(first.name, "hscam-live-000001.png")
+            self.assertEqual(second.name, "hscam-live-000002.png")
+            self.assertEqual(first.read_bytes(), self.PNG)
+            self.assertEqual(second.read_bytes(), self.PNG + b"second")
+
+    def test_restart_resumes_after_highest_existing_number(self):
+        with TemporaryDirectory() as directory:
+            output = Path(directory)
+            (output / "hscam-live-000009.png").write_bytes(self.PNG)
+            (output / "hscam-live-readme.png").write_bytes(b"not a snapshot")
+            result = PngSaver(output).save(self.PNG)
+            self.assertEqual(result.name, "hscam-live-000010.png")
+            self.assertEqual((output / "hscam-live-000009.png").read_bytes(), self.PNG)
+
+    def test_racing_new_file_never_overwrites(self):
+        with TemporaryDirectory() as directory:
+            saver = PngSaver(directory)
+            another_process_file = Path(directory) / "hscam-live-000001.png"
+            another_process_file.write_bytes(b"original")
+            result = saver.save(self.PNG)
+            self.assertEqual(result.name, "hscam-live-000002.png")
+            self.assertEqual(another_process_file.read_bytes(), b"original")
+
+    def test_invalid_png_does_not_create_a_file(self):
+        with TemporaryDirectory() as directory:
+            saver = PngSaver(directory)
+            with self.assertRaises(ValueError):
+                saver.save(b"not a PNG")
+            self.assertEqual(list(Path(directory).iterdir()), [])
 
 
 if __name__ == "__main__":
