@@ -28,7 +28,31 @@ apps/hscam-live/.venv/bin/python apps/hscam-live/hscam_live.py \
   --scale 2
 ```
 
-The defaults already use the listed OV5647 mode, `640x128` RAW/uncompressed, 10 frames per burst, zero-based frame index 5, 3333 µs frame duration, 3000 µs exposure, gain 1, and 2× nearest-neighbor zoom. Override them with the corresponding command-line options (`--size` is also available). Close the window to stop.
+The defaults already use the listed OV5647 mode, `640x128` RAW/uncompressed, 10 frames per burst, zero-based frame index 5, 3333 µs frame duration, 3000 µs exposure, gain 1, and 2× nearest-neighbor zoom. Command-line options provide the **initial** GUI values (`--size` and `--mode` remain launch-time settings). Close the window to stop.
+
+## Change settings while previewing
+
+The controls above the image let you edit:
+
+- **Frames / batch**: number of RAW frames captured in each burst
+- **Preview frame (0-based)**: frame exported as PNG, from `0` to `frames - 1`
+- **Frame duration (µs)**: requested sensor frame interval (e.g. `3333` for approximately 300 FPS)
+- **Exposure (µs)**: requested exposure duration (e.g. `3000`)
+- **Analogue gain**: requested gain multiplier (e.g. `1` or `2.5`)
+
+Enter values with the spinboxes and select **Apply next batch** (or press Enter in a field). The app validates all five values together; an invalid setting is rejected and **does not change the running capture**. A validated change is queued atomically: the currently running capture/export finishes with its original settings, and the worker uses the new settings when it starts its next batch. If that next batch has already started, the change takes effect one batch later. The preview status shows the settings revision and values used for the **displayed image**, so it is clear when a change has taken effect.
+
+There is no need to restart the GUI to change those five parameters. Camera settings remain subject to sensor/libcamera constraints; the preview stops and displays the capture error if a requested combination is rejected.
+
+## Local validation
+
+From the repository root, after installing the virtual environment:
+
+```bash
+apps/hscam-live/.venv/bin/python -m unittest discover -s apps/hscam-live -p 'test_*.py' -v
+```
+
+These tests validate settings changes and CLI argument construction without using the camera or starting the GUI.
 
 The app creates HSCAP bundles and PNGs in a temporary directory and removes each after display. It checks for `build/hscam-capture` and `build/hscam-export` relative to the repository, regardless of the current working directory. The status bar reports **batch time** and **preview FPS**, not measured sensor FPS. `hscam-capture` must have exclusive camera access, and a failed capture/export stops the preview with an error message.
 
