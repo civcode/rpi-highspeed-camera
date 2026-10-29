@@ -44,6 +44,14 @@ Enter values with the spinboxes and select **Apply next batch** (or press Enter 
 
 There is no need to restart the GUI to change those five parameters. Camera settings remain subject to sensor/libcamera constraints; the preview stops and displays the capture error if a requested combination is rejected.
 
+## Save a preview image
+
+Click **Save image** below the preview to write the **currently displayed frame** as a PNG directly under `/tmp`. No file-selection dialog appears. The button becomes available after the first frame is displayed.
+
+Files are named `/tmp/hscam-live-000001.png`, `/tmp/hscam-live-000002.png`, and so on. The numbering resumes after the highest existing matching file when the app restarts, and an existing file is never overwritten. The full-resolution PNG from `hscam-export` is saved unchanged; the GUI's `--scale` zoom is **not** baked into the saved image. The UI shows the saved path or any error.
+
+Only images explicitly saved with this button are kept. Unsaved intermediate HSCAP/PNG files remain temporary and are cleaned up after each batch. Note that `/tmp` is temporary storage; these snapshots may be deleted on reboot or by system cleanup. Copy files elsewhere if you want to retain them.
+
 ## Local validation
 
 From the repository root, after installing the virtual environment:
@@ -52,8 +60,8 @@ From the repository root, after installing the virtual environment:
 apps/hscam-live/.venv/bin/python -m unittest discover -s apps/hscam-live -p 'test_*.py' -v
 ```
 
-These tests validate settings changes and CLI argument construction without using the camera or starting the GUI.
+These tests validate settings changes, CLI argument construction, and numbered snapshot saving without using the camera or starting the GUI.
 
-The app creates HSCAP bundles and PNGs in a temporary directory and removes each after display. It checks for `build/hscam-capture` and `build/hscam-export` relative to the repository, regardless of the current working directory. The status bar reports **batch time** and **preview FPS**, not measured sensor FPS. `hscam-capture` must have exclusive camera access, and a failed capture/export stops the preview with an error message.
+The app creates intermediate HSCAP bundles and PNGs in a temporary directory and removes each after display. It checks for `build/hscam-capture` and `build/hscam-export` relative to the repository, regardless of the current working directory. The status bar reports **batch time** and **preview FPS**, not measured sensor FPS. `hscam-capture` must have exclusive camera access, and a failed capture/export stops the preview with an error message.
 
 For performance-sensitive continuous live view, a future implementation should keep a single `libhscam` capture session open and convert selected frames in memory rather than restarting the camera and writing HSCAP/PNG files every burst.
