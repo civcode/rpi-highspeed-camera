@@ -110,7 +110,7 @@ class PngSaver:
                 self.next_number = max(self.next_number, int(number) + 1)
 
     def save(self, image_bytes):
-        if not image_bytes.startswith(b"\\x89PNG\\r\\n\\x1a\\n"):
+        if not image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
             raise ValueError("the displayed frame does not contain PNG data")
         while True:
             path = self.directory / f"hscam-live-{self.next_number:06d}.png"
